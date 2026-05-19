@@ -233,9 +233,74 @@ Common failure classes:
 
 - No `pathmask` in `/proc/modules`: boot service skipped or `insmod` failed.
 - `Unknown symbol`: kernel export/KMI mismatch.
+- `disagrees about version of symbol module_layout`: OEM kernel modversions
+  CRC mismatch (see below).
 - Empty `deny_uids` in deny mode: package names did not resolve to UIDs.
 - All targets missing at boot: service skips loading.
 - Old `nohello` module loaded: uninstall the old module and reboot.
+
+## OEM Kernel Compatibility
+
+Some OEM kernels (Xiaomi HyperOS / vivo OriginOS / etc.) enforce strict
+modversions CRC validation. The released PathMask `.ko` is built against
+Google GKI headers whose CRCs may not match the OEM kernel's internal
+symbol table. When this happens, `dmesg` reports:
+
+```text
+pathmask: disagrees about version of symbol module_layout
+insmod: failed to load pathmask.ko: Exec format error
+```
+
+**The module will not load, but it will NOT cause a reboot.** This is a
+safe, clean rejection by the kernel.
+
+Known affected devices:
+
+- Xiaomi 13 Ultra (ishtar) — HyperOS 3.0.303 / 5.15.178-android13-8
+
+Workarounds:
+
+1. Ask the developer for a device-specific `.ko` built from the OEM's
+   open-source kernel tree.
+2. Build one yourself (see "Building from OEM Kernel Source" below).
+3. If neither is available, uninstall the module — your device is not
+   currently supported.
+
+## Building from OEM Kernel Source
+
+If the released `.ko` fails with `disagrees about version of symbol`,
+you can build a device-specific ko from the OEM's open-source kernel:
+
+```sh
+# 1. Clone the OEM kernel source (example: Xiaomi 13 Ultra)
+git clone --depth=1 -b ishtar-t-oss \
+    https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel-source
+
+# 2. Configure (disable LTO to avoid OOM on 16 GB machines)
+cd kernel-source
+make ARCH=arm64 LLVM=1 gki_defconfig
+./scripts/config --file .config \
+    -d LTO_CLANG -d LTO_CLANG_THIN -e LTO_NONE -d CFI_CLANG
+make ARCH=arm64 LLVM=1 olddefconfig
+
+# 3. Build until vmlinux.symvers appears (full vmlinux not needed)
+make ARCH=arm64 LLVM=1 LLVM_IAS=1 -j4 vmlinux
+# BTF/pahole errors can be ignored as long as vmlinux.symvers exists
+
+# 4. Link Module.symvers
+ln -sf vmlinux.symvers Module.symvers
+
+# 5. Build pathmask.ko
+cd /path/to/lkm-build-OP13/kernel
+KDIR=/path/to/kernel-source make ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1
+
+# 6. Verify
+modinfo pathmask.ko | grep vermagic
+llvm-readelf -SW pathmask.ko | grep __versions  # size must be non-zero
+```
+
+Package the resulting `pathmask.ko` with `tools/package_ksu.ps1` or
+`tools/package_ksu.sh` to create a KernelSU-installable zip.
 
 ## Use Your Own Module
 
