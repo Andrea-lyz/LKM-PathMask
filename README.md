@@ -200,11 +200,13 @@ edits these files for you, but they can also be inspected manually:
 - `/data/adb/pathmask/deny_uids.conf`: direct UID blacklist, one UID per line.
   Use this when package-name resolution is unreliable or when testing shell/app
   UIDs directly.
-- `/data/adb/pathmask/wait_seconds.conf`: how long the boot service waits for
-  configured target paths to appear and (in `deny` mode) for package names to
-  resolve to UIDs. Default 90 seconds. The boot service writes its current
-  phase to `/data/adb/pathmask/boot_state` so the WebUI can show whether the
-  module is still waiting or has decided to skip loading.
+- `/data/adb/pathmask/wait_seconds.conf`: total budget the boot service spends
+  waiting for configured target paths to appear and (in `deny` mode) for
+  package names to resolve to UIDs. Default 60 seconds. Both phases share the
+  same deadline, so the worst-case boot delay is bounded by this value, not by
+  twice it. The boot service writes its current phase to
+  `/data/adb/pathmask/boot_state` so the WebUI can show whether the module is
+  still waiting or has decided to skip loading.
 
 ## WebUI Diagnosis
 

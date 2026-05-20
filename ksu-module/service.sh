@@ -33,7 +33,7 @@ TARGET_PATHS=""
 HIDE_DIRENTS=1
 SCOPE_MODE=deny
 DENY_UIDS=""
-WAIT_SECONDS=90
+WAIT_SECONDS=60
 UNRESOLVED_PACKAGES=0
 
 read_load_failure_count() {
@@ -191,7 +191,7 @@ init_persistent_config() {
 	seed_config_file "$SCOPE_MODE_CONFIG" "$MOD_SCOPE_MODE_CONFIG" "deny"
 	seed_config_file "$DENY_UIDS_CONFIG" "$MOD_DENY_UIDS_CONFIG" ""
 	seed_config_file "$DENY_PACKAGES_CONFIG" "$MOD_DENY_PACKAGES_CONFIG" ""
-	seed_config_file "$WAIT_SECONDS_CONFIG" "$MOD_WAIT_SECONDS_CONFIG" "90"
+	seed_config_file "$WAIT_SECONDS_CONFIG" "$MOD_WAIT_SECONDS_CONFIG" "60"
 }
 
 add_target_path() {
@@ -416,17 +416,17 @@ log_missing_targets() {
 }
 
 wait_for_targets() {
-	ELAPSED=0
-	NOW="$(date +%s 2>/dev/null || echo 0)"
-	DEADLINE=$((NOW + WAIT_SECONDS))
-	write_boot_state "waiting-targets" "$TARGET_PATHS" "$DEADLINE"
+	END="$1"
 
-	while [ "$ELAPSED" -lt "$WAIT_SECONDS" ]; do
+	write_boot_state "waiting-targets" "$TARGET_PATHS" "$END"
+
+	while :; do
 		if all_targets_exist; then
 			return 0
 		fi
+		NOW="$(date +%s 2>/dev/null || echo 0)"
+		[ "$NOW" -ge "$END" ] && break
 		sleep 1
-		ELAPSED=$((ELAPSED + 1))
 	done
 
 	log_missing_targets
@@ -434,12 +434,11 @@ wait_for_targets() {
 }
 
 wait_for_deny_packages() {
-	ELAPSED=0
-	NOW="$(date +%s 2>/dev/null || echo 0)"
-	DEADLINE=$((NOW + WAIT_SECONDS))
-	write_boot_state "waiting-packages" "" "$DEADLINE"
+	END="$1"
 
-	while [ "$ELAPSED" -lt "$WAIT_SECONDS" ]; do
+	write_boot_state "waiting-packages" "" "$END"
+
+	while :; do
 		DENY_UIDS=""
 		read_deny_uid_config
 		read_deny_package_config 1
@@ -447,8 +446,9 @@ wait_for_deny_packages() {
 			read_deny_package_config 0
 			return 0
 		fi
+		NOW="$(date +%s 2>/dev/null || echo 0)"
+		[ "$NOW" -ge "$END" ] && break
 		sleep 1
-		ELAPSED=$((ELAPSED + 1))
 	done
 
 	DENY_UIDS=""
@@ -509,7 +509,7 @@ fi
 
 case "$WAIT_SECONDS" in
 	''|*[!0-9]*)
-		WAIT_SECONDS=90
+		WAIT_SECONDS=60
 		;;
 esac
 
@@ -546,14 +546,16 @@ fi
 
 sleep 10
 
-if ! wait_for_targets; then
+WAIT_DEADLINE=$(( $(date +%s 2>/dev/null || echo 0) + WAIT_SECONDS ))
+
+if ! wait_for_targets "$WAIT_DEADLINE"; then
 	log_i "no configured targets exist, skip loading"
 	write_boot_state "skipped-targets-missing" "$TARGET_PATHS" ""
 	exit 0
 fi
 
 if [ "$SCOPE_MODE" = "deny" ]; then
-	wait_for_deny_packages
+	wait_for_deny_packages "$WAIT_DEADLINE"
 	if [ -z "$DENY_UIDS" ]; then
 		log_i "scope_mode=deny but no deny UIDs resolved, skip loading"
 		write_boot_state "skipped-no-uids" "deny mode without resolved UIDs" ""

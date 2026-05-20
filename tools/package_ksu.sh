@@ -8,7 +8,7 @@ HIDE_DIRENTS="${HIDE_DIRENTS:-1}"
 SCOPE_MODE="${SCOPE_MODE:-deny}"
 DENY_PACKAGES="${DENY_PACKAGES:-com.chunqiunativecheck,com.eltavine.duckdetector,luna.safe.luna}"
 DENY_UIDS="${DENY_UIDS:-}"
-WAIT_SECONDS="${WAIT_SECONDS:-${TARGET_WAIT_SECONDS:-${PACKAGE_WAIT_SECONDS:-90}}}"
+WAIT_SECONDS="${WAIT_SECONDS:-60}"
 UPDATE_JSON_URL="${UPDATE_JSON_URL:-}"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

@@ -8,7 +8,7 @@ param(
     [string]$ScopeMode = "deny",
     [string]$DenyPackage = "com.chunqiunativecheck,com.eltavine.duckdetector,luna.safe.luna",
     [string]$DenyUid = "",
-    [int]$WaitSeconds = 90,
+    [int]$WaitSeconds = 60,
     [string]$UpdateJson = ""
 )
 

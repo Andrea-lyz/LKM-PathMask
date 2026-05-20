@@ -149,7 +149,7 @@ between global and blacklist mode, select packages, and reload the module.
 For late-created `/dev` paths, increase the wait time while packaging:
 
 ```powershell
-.\tools\package_ksu.ps1 -KoPath .\kernel\pathmask.ko -Output .\out\pathmask-ksu.zip -TargetPath "/dev/example,/system_ext/app/SoterService" -ScopeMode deny -DenyPackage "com.example.detector" -WaitSeconds 90
+.\tools\package_ksu.ps1 -KoPath .\kernel\pathmask.ko -Output .\out\pathmask-ksu.zip -TargetPath "/dev/example,/system_ext/app/SoterService" -ScopeMode deny -DenyPackage "com.example.detector" -WaitSeconds 60
 ```
 
 For very dynamic paths such as `/data/incremental/...`, the path must exist at

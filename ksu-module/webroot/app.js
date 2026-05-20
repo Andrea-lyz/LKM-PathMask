@@ -20,7 +20,7 @@ const DEFAULT_DENY_PACKAGES = [
 	"luna.safe.luna",
 ];
 
-const DEFAULT_WAIT_SECONDS = 90;
+const DEFAULT_WAIT_SECONDS = 60;
 const BOOT_POLL_INTERVAL_MS = 5000;
 const BOOT_WAITING_STATES = new Set(["init", "waiting-targets", "waiting-packages"]);
 

@@ -237,7 +237,7 @@ PathMask 的持久化配置都放在 `/data/adb/pathmask`。一般建议用 WebU
 
 `/data/adb/pathmask/wait_seconds.conf`
 
-开机时等待隐藏路径出现、以及 deny 模式下等待包名解析为 UID 的秒数。默认 90。路径或包名出现得慢的设备可以调大；也可以在 WebUI 的「开机等待秒数」里直接改。
+开机时等待隐藏路径出现、以及 deny 模式下等待包名解析为 UID 的总秒数预算。默认 60。两个等待阶段共用同一个截止时间，所以最坏情况下只会延迟这么多，而不是这一项的两倍。路径或包名出现得慢的设备可以调大；也可以在 WebUI 的「开机等待秒数」里直接改。
 
 `/data/adb/pathmask/boot_state`
 
