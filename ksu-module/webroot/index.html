@@ -99,6 +99,17 @@
 				</div>
 				<textarea id="denyUidsInput" rows="4" spellcheck="false" placeholder="每行一个 UID"></textarea>
 			</section>
+
+			<section class="panel">
+				<div class="sectionTitle">
+					<h2>开机等待秒数</h2>
+				</div>
+				<label class="switchRow">
+					<span>路径出现 / 包名解析超时</span>
+					<input id="waitSecondsInput" type="number" min="1" max="600" step="1" inputmode="numeric" value="90">
+				</label>
+				<p class="hint">默认 90 秒。开机时如果隐藏路径还没出现、或黑名单包名还没解析为 UID，service.sh 会等待这段时间，到期后仍未就绪就跳过加载。包名解析慢的设备可以调大。</p>
+			</section>
 		</section>
 
 		<section id="diagnosisPanel" class="tabPanel">

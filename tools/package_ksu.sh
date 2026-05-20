@@ -8,8 +8,7 @@ HIDE_DIRENTS="${HIDE_DIRENTS:-1}"
 SCOPE_MODE="${SCOPE_MODE:-deny}"
 DENY_PACKAGES="${DENY_PACKAGES:-com.chunqiunativecheck,com.eltavine.duckdetector,luna.safe.luna}"
 DENY_UIDS="${DENY_UIDS:-}"
-TARGET_WAIT_SECONDS="${TARGET_WAIT_SECONDS:-90}"
-PACKAGE_WAIT_SECONDS="${PACKAGE_WAIT_SECONDS:-90}"
+WAIT_SECONDS="${WAIT_SECONDS:-${TARGET_WAIT_SECONDS:-${PACKAGE_WAIT_SECONDS:-90}}}"
 UPDATE_JSON_URL="${UPDATE_JSON_URL:-}"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -57,8 +56,8 @@ printf '%s' "$HIDE_DIRENTS" > "$STAGE_DIR/hide_dirents.conf"
 printf '%s' "$SCOPE_MODE" > "$STAGE_DIR/scope_mode.conf"
 printf '%s' "$DENY_PACKAGES" | tr ',' '\n' > "$STAGE_DIR/deny_packages.conf"
 printf '%s' "$DENY_UIDS" | tr ',' '\n' > "$STAGE_DIR/deny_uids.conf"
-printf '%s' "$TARGET_WAIT_SECONDS" > "$STAGE_DIR/target_wait_seconds.conf"
-printf '%s' "$PACKAGE_WAIT_SECONDS" > "$STAGE_DIR/package_wait_seconds.conf"
+printf '%s' "$WAIT_SECONDS" > "$STAGE_DIR/wait_seconds.conf"
+rm -f "$STAGE_DIR/target_wait_seconds.conf" "$STAGE_DIR/package_wait_seconds.conf" 2>/dev/null || true
 chmod 0755 "$STAGE_DIR/service.sh" "$STAGE_DIR/uninstall.sh"
 
 rm -f "$OUTPUT"
@@ -74,8 +73,7 @@ echo "Hide dirents: $HIDE_DIRENTS"
 echo "Scope mode: $SCOPE_MODE"
 echo "Deny packages: $DENY_PACKAGES"
 echo "Deny UIDs: $DENY_UIDS"
-echo "Target wait seconds: $TARGET_WAIT_SECONDS"
-echo "Package wait seconds: $PACKAGE_WAIT_SECONDS"
+echo "Wait seconds: $WAIT_SECONDS"
 if [ -n "$UPDATE_JSON_URL" ]; then
 	echo "Update JSON: $UPDATE_JSON_URL"
 fi

@@ -8,8 +8,7 @@ param(
     [string]$ScopeMode = "deny",
     [string]$DenyPackage = "com.chunqiunativecheck,com.eltavine.duckdetector,luna.safe.luna",
     [string]$DenyUid = "",
-    [int]$TargetWaitSeconds = 90,
-    [int]$PackageWaitSeconds = 90,
+    [int]$WaitSeconds = 90,
     [string]$UpdateJson = ""
 )
 
@@ -66,8 +65,13 @@ Set-Content -LiteralPath (Join-Path $StageDir "hide_dirents.conf") -Value $HideD
 Set-Content -LiteralPath (Join-Path $StageDir "scope_mode.conf") -Value $ScopeMode -NoNewline -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $StageDir "deny_packages.conf") -Value $DenyPackageList -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $StageDir "deny_uids.conf") -Value $DenyUidList -Encoding ASCII
-Set-Content -LiteralPath (Join-Path $StageDir "target_wait_seconds.conf") -Value $TargetWaitSeconds -NoNewline -Encoding ASCII
-Set-Content -LiteralPath (Join-Path $StageDir "package_wait_seconds.conf") -Value $PackageWaitSeconds -NoNewline -Encoding ASCII
+Set-Content -LiteralPath (Join-Path $StageDir "wait_seconds.conf") -Value $WaitSeconds -NoNewline -Encoding ASCII
+foreach ($legacyName in @("target_wait_seconds.conf", "package_wait_seconds.conf")) {
+    $legacyPath = Join-Path $StageDir $legacyName
+    if (Test-Path -LiteralPath $legacyPath) {
+        Remove-Item -LiteralPath $legacyPath -Force
+    }
+}
 
 $TextExtensions = @(".conf", ".css", ".html", ".js", ".md", ".prop", ".sh")
 Get-ChildItem -LiteralPath $StageDir -Recurse -File | ForEach-Object {
@@ -103,8 +107,7 @@ Write-Host "Hide dirents: $HideDirents"
 Write-Host "Scope mode: $ScopeMode"
 Write-Host "Deny packages: $($DenyPackageList -join ', ')"
 Write-Host "Deny UIDs: $($DenyUidList -join ', ')"
-Write-Host "Target wait seconds: $TargetWaitSeconds"
-Write-Host "Package wait seconds: $PackageWaitSeconds"
+Write-Host "Wait seconds: $WaitSeconds"
 if ($UpdateJson.Trim()) {
     Write-Host "Update JSON: $($UpdateJson.Trim())"
 }

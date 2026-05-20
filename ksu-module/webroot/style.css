@@ -189,6 +189,7 @@ button {
 
 input[type="text"],
 input[type="search"],
+input[type="number"],
 textarea {
 	width: 100%;
 	border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
@@ -196,6 +197,11 @@ textarea {
 	padding: 10px 11px;
 	color: CanvasText;
 	background: Canvas;
+}
+
+.switchRow input[type="number"] {
+	width: 110px;
+	text-align: right;
 }
 
 textarea {
@@ -264,6 +270,13 @@ button:active {
 .miniToggle {
 	margin: 0;
 	font-size: 13px;
+}
+
+.hint {
+	margin: 8px 0 0;
+	color: color-mix(in srgb, CanvasText 65%, transparent);
+	font-size: 12px;
+	line-height: 1.5;
 }
 
 .search {

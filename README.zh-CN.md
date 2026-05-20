@@ -235,13 +235,13 @@ PathMask 的持久化配置都放在 `/data/adb/pathmask`。一般建议用 WebU
 
 直接填写 UID，一行一个数字。适合包名解析失败、测试 shell UID，或者你已经知道目标 App UID 的情况。
 
-`/data/adb/pathmask/target_wait_seconds.conf`
+`/data/adb/pathmask/wait_seconds.conf`
 
-开机时等待隐藏路径出现的秒数。有些路径启动较晚，等待时间太短会导致模块跳过加载。
+开机时等待隐藏路径出现、以及 deny 模式下等待包名解析为 UID 的秒数。默认 90。路径或包名出现得慢的设备可以调大；也可以在 WebUI 的「开机等待秒数」里直接改。
 
-`/data/adb/pathmask/package_wait_seconds.conf`
+`/data/adb/pathmask/boot_state`
 
-开机时等待包名解析成 UID 的秒数。检测类 App 或新安装 App 启动较晚时，可以适当调大。
+开机脚本运行到哪一阶段的状态文件，由 service.sh 自动写入：`init`、`waiting-targets`、`waiting-packages`、`loaded`、`already-loaded`、`paused`、`skipped-*`、`failed-*` 等。WebUI 健康检查会读它显示「正在等待，剩 X 秒」之类的进度，避免误以为没生效。手动改没意义，是观测用的。
 
 ## 自己打包
 

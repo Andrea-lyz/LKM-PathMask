@@ -20,12 +20,18 @@ const DEFAULT_DENY_PACKAGES = [
 	"luna.safe.luna",
 ];
 
+const DEFAULT_WAIT_SECONDS = 90;
+const BOOT_POLL_INTERVAL_MS = 5000;
+const BOOT_WAITING_STATES = new Set(["init", "waiting-targets", "waiting-packages"]);
+
 const files = {
 	targets: `${CONFIGDIR}/target_path.conf`,
 	hideDirents: `${CONFIGDIR}/hide_dirents.conf`,
 	scope: `${CONFIGDIR}/scope_mode.conf`,
 	denyPackages: `${CONFIGDIR}/deny_packages.conf`,
 	denyUids: `${CONFIGDIR}/deny_uids.conf`,
+	waitSeconds: `${CONFIGDIR}/wait_seconds.conf`,
+	bootState: `${CONFIGDIR}/boot_state`,
 	failCount: `${CONFIGDIR}/load_fail_count`,
 	failReason: `${CONFIGDIR}/load_fail_reason`,
 	service: `${MODDIR}/service.sh`,
@@ -41,6 +47,7 @@ let activeLog = "status";
 let activeLogPage = 0;
 let lastReport = "";
 let lastValidation = { errors: [], warnings: [], ok: [] };
+let bootPollHandle = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -299,6 +306,11 @@ function updateHealthList() {
 		items.push({ level: "bad", title: "模块未加载", body: "查看脚本日志和内核日志，重点找 ko 缺失、KMI 不匹配、UID 为空或目标路径不存在。" });
 	}
 
+	const bootStatusItem = describeBootState(snapshot, !!loaded);
+	if (bootStatusItem) {
+		items.push(bootStatusItem);
+	}
+
 	if ((snapshot.koInfo || "").includes("No such file") || (snapshot.koInfo || "").includes("missing")) {
 		items.push({ level: "bad", title: "pathmask.ko 不存在", body: `${files.ko} 缺失，重新安装模块包。` });
 	} else {
@@ -434,6 +446,8 @@ async function refreshConfig() {
 	const scopeText = await readFile(files.scope);
 	const pkgText = await readFile(files.denyPackages);
 	const uidText = await readFile(files.denyUids);
+	const waitText = await readFile(files.waitSeconds);
+	const bootStateText = await readFile(files.bootState);
 	const moduleText = await safeExec(`grep '^${MODULE_NAME} ' /proc/modules || true`);
 	const legacyModuleText = await safeExec(`grep '^${LEGACY_MODULE_NAME} ' /proc/modules || true`);
 	const sysDenyUids = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/deny_uids ] && cat /sys/module/${MODULE_NAME}/parameters/deny_uids || true`);
@@ -442,6 +456,7 @@ async function refreshConfig() {
 	const legacyConfigInfo = await safeExec(`[ -d ${shellQuote(LEGACY_CONFIGDIR)} ] && echo ${shellQuote(LEGACY_CONFIGDIR)} || true`);
 	const loadFailCountText = await readFile(files.failCount);
 	const loadFailReasonText = await readFile(files.failReason);
+	const nowText = await safeExec(`date +%s 2>/dev/null || echo 0`);
 
 	renderPaths(linesFromText(targetText));
 	$("#hideDirentsInput").checked = (hideText.trim() || "1") !== "0";
@@ -450,6 +465,7 @@ async function refreshConfig() {
 	const packageLines = linesFromText(pkgText);
 	selectedPackages = new Set(packageLines.length ? packageLines : DEFAULT_DENY_PACKAGES);
 	$("#denyUidsInput").value = linesFromText(uidText).join("\n");
+	$("#waitSecondsInput").value = parseWaitSeconds(waitText);
 	renderApps();
 
 	lastSnapshot = {
@@ -459,6 +475,10 @@ async function refreshConfig() {
 		scopeText,
 		pkgText,
 		uidText,
+		waitText,
+		bootStateText,
+		bootState: parseBootState(bootStateText),
+		nowEpoch: Number.parseInt((nowText || "0").trim(), 10) || 0,
 		moduleText,
 		legacyModuleText,
 		sysDenyUids,
@@ -472,6 +492,151 @@ async function refreshConfig() {
 	await refreshTargetProbe();
 	updateSummary(lastSnapshot);
 	updateHealthList();
+	scheduleBootPolling(lastSnapshot.bootState);
+}
+
+function parseWaitSeconds(text) {
+	const value = Number.parseInt(firstLine(text), 10);
+	if (Number.isFinite(value) && value > 0) return value;
+	return DEFAULT_WAIT_SECONDS;
+}
+
+function parseBootState(text) {
+	const out = { state: "", updated: 0, deadline: 0, detail: "" };
+	if (!text) return out;
+	for (const rawLine of text.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		const idx = line.indexOf("=");
+		if (idx <= 0) continue;
+		const key = line.slice(0, idx);
+		const value = line.slice(idx + 1);
+		if (key === "state") out.state = value;
+		else if (key === "updated") out.updated = Number.parseInt(value, 10) || 0;
+		else if (key === "deadline") out.deadline = Number.parseInt(value, 10) || 0;
+		else if (key === "detail") out.detail = value;
+	}
+	return out;
+}
+
+function stopBootPolling() {
+	if (bootPollHandle) {
+		clearInterval(bootPollHandle);
+		bootPollHandle = null;
+	}
+}
+
+function scheduleBootPolling(bootState) {
+	if (!bootState || !BOOT_WAITING_STATES.has(bootState.state)) {
+		stopBootPolling();
+		return;
+	}
+	if (bootPollHandle) return;
+	bootPollHandle = setInterval(() => {
+		if (busy) return;
+		readFile(files.bootState).then((text) => {
+			const next = parseBootState(text);
+			lastSnapshot.bootStateText = text;
+			lastSnapshot.bootState = next;
+			return safeExec(`date +%s 2>/dev/null || echo 0`).then((nowText) => {
+				lastSnapshot.nowEpoch = Number.parseInt((nowText || "0").trim(), 10) || 0;
+				updateHealthList();
+				if (!BOOT_WAITING_STATES.has(next.state)) stopBootPolling();
+			});
+		}).catch(() => {});
+	}, BOOT_POLL_INTERVAL_MS);
+}
+
+function describeBootState(snapshot, moduleLoaded) {
+	const boot = snapshot.bootState;
+	if (!boot || !boot.state) return null;
+
+	const now = snapshot.nowEpoch || Math.floor(Date.now() / 1000);
+	const remaining = boot.deadline ? Math.max(0, boot.deadline - now) : 0;
+	const detailSuffix = boot.detail ? `（${boot.detail}）` : "";
+
+	switch (boot.state) {
+		case "init":
+			return moduleLoaded ? null : {
+				level: "warn",
+				title: "开机服务正在准备",
+				body: "service.sh 已开始执行，正在加载配置。",
+			};
+		case "waiting-targets":
+			return {
+				level: "warn",
+				title: "正在等待隐藏路径出现",
+				body: remaining > 0
+					? `还需等待最多 ${remaining} 秒，超时仍不存在的路径会被跳过。${detailSuffix}`
+					: `等待已超时，模块可能已跳过加载。${detailSuffix}`,
+			};
+		case "waiting-packages":
+			return {
+				level: "warn",
+				title: "正在等待包名解析为 UID",
+				body: remaining > 0
+					? `还需等待最多 ${remaining} 秒，超时未解析到 UID 会跳过加载。${detailSuffix}`
+					: `等待已超时，模块可能已跳过加载。${detailSuffix}`,
+			};
+		case "loaded":
+			return null;
+		case "already-loaded":
+			return moduleLoaded ? null : {
+				level: "warn",
+				title: "上次开机时模块已存在",
+				body: "service.sh 检测到 pathmask 已被加载，跳过 insmod。",
+			};
+		case "skipped-targets-missing":
+			return {
+				level: "warn",
+				title: "所有隐藏路径在等待结束时仍不存在",
+				body: `service.sh 跳过加载。可调大等待秒数或检查路径是否拼写正确。${detailSuffix}`,
+			};
+		case "skipped-no-uids":
+			return {
+				level: "warn",
+				title: "deny 模式下未解析到任何 UID",
+				body: `service.sh 跳过加载。检查包名是否拼写正确，或填写直接 UID。${detailSuffix}`,
+			};
+		case "skipped-empty-targets":
+			return {
+				level: "bad",
+				title: "隐藏路径配置为空",
+				body: `service.sh 立即退出。${detailSuffix}`,
+			};
+		case "skipped-fail-guard":
+			return {
+				level: "bad",
+				title: "连续加载失败保护跳过加载",
+				body: `保存并热重载会重置保护并重试。${detailSuffix}`,
+			};
+		case "skipped-legacy-loaded":
+			return {
+				level: "warn",
+				title: "旧 nohello 模块占据内核",
+				body: `卸载旧模块后重启即可加载 PathMask。${detailSuffix}`,
+			};
+		case "failed-missing-ko":
+			return {
+				level: "bad",
+				title: "pathmask.ko 文件丢失",
+				body: `重新安装模块包。${detailSuffix}`,
+			};
+		case "failed-insmod":
+			return {
+				level: "bad",
+				title: "insmod 失败",
+				body: `查看内核日志找 vermagic / unknown symbol / module_layout 等原因。${detailSuffix}`,
+			};
+		case "paused":
+			return {
+				level: "warn",
+				title: "WebUI 已暂停隐藏",
+				body: "热重载或重启后会恢复加载。",
+			};
+		default:
+			return null;
+	}
 }
 
 async function refreshTargetProbe() {
@@ -518,6 +683,20 @@ async function validateConfig(options = {}) {
 	for (const uid of directUids) {
 		if (!/^\d+$/.test(uid)) {
 			errors.push(`UID 只能填写数字：${uid}`);
+		}
+	}
+
+	const waitRaw = $("#waitSecondsInput").value.trim();
+	if (!waitRaw) {
+		warnings.push(`等待秒数为空，将使用默认值 ${DEFAULT_WAIT_SECONDS}。`);
+	} else if (!/^\d+$/.test(waitRaw)) {
+		errors.push(`等待秒数只能填写正整数：${waitRaw}`);
+	} else {
+		const waitNum = Number.parseInt(waitRaw, 10);
+		if (waitNum <= 0) {
+			errors.push("等待秒数必须大于 0。");
+		} else if (waitNum > 600) {
+			warnings.push(`等待秒数较大（${waitNum}s），开机加载会变慢。`);
 		}
 	}
 
@@ -586,6 +765,7 @@ async function saveConfig() {
 	await writeLines(files.scope, [scope]);
 	await writeLines(files.denyPackages, [...selectedPackages].sort());
 	await writeLines(files.denyUids, linesFromText($("#denyUidsInput").value));
+	await writeLines(files.waitSeconds, [String(currentWaitSeconds())]);
 	await refreshConfig();
 	statusText.textContent = "已保存，重启后生效";
 	showToast("已保存，重启后生效");
@@ -599,9 +779,10 @@ async function reloadModule() {
 	await writeLines(files.scope, [scope]);
 	await writeLines(files.denyPackages, [...selectedPackages].sort());
 	await writeLines(files.denyUids, linesFromText($("#denyUidsInput").value));
+	await writeLines(files.waitSeconds, [String(currentWaitSeconds())]);
 	statusText.textContent = "正在热重载...";
 	const output = await execShell(
-		`rm -f ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_TARGET_WAIT_SECONDS=5 PATHMASK_PACKAGE_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
+		`rm -f ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
 	);
 	setLogContent("kernel", output);
 	await refreshDiagnostics();
@@ -610,7 +791,7 @@ async function reloadModule() {
 
 async function pauseHiding() {
 	const output = await execShell(
-		`if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; log -p i -t pathmask 'hidden paths paused from WebUI'; echo 'pathmask unloaded'; else echo 'pathmask is not loaded'; fi; dmesg | grep -Ei 'pathmask|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
+		`if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; log -p i -t pathmask 'hidden paths paused from WebUI'; printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask unloaded'; else echo 'pathmask is not loaded'; fi; dmesg | grep -Ei 'pathmask|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
 	);
 	setLogContent("kernel", output);
 	await refreshDiagnostics();
@@ -624,8 +805,15 @@ async function restoreDefaults() {
 	await writeLines(files.scope, ["deny"]);
 	await writeLines(files.denyPackages, DEFAULT_DENY_PACKAGES);
 	await writeLines(files.denyUids, []);
+	await writeLines(files.waitSeconds, [String(DEFAULT_WAIT_SECONDS)]);
 	await refreshConfig();
 	showToast("已恢复默认配置，重启后生效");
+}
+
+function currentWaitSeconds() {
+	const value = Number.parseInt($("#waitSecondsInput").value, 10);
+	if (Number.isFinite(value) && value > 0) return value;
+	return DEFAULT_WAIT_SECONDS;
 }
 
 async function refreshDiagnostics() {
@@ -741,6 +929,7 @@ for (const radio of document.querySelectorAll('input[name="scope"]')) {
 }
 
 $("#denyUidsInput").addEventListener("input", updateHealthList);
+$("#waitSecondsInput").addEventListener("input", updateHealthList);
 
 runAction("正在读取配置...", refreshConfig).catch((error) => {
 	statusText.textContent = "读取失败";
