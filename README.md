@@ -6,6 +6,23 @@ testing on devices you own or administer.
 
 [中文教程](README.zh-CN.md)
 
+## ⚠️ Disclaimer
+
+PathMask is **not** designed to evade root or environment detection in games.
+It is a generic VFS-path masking demo. Pointing it at game anti-cheat
+processes is off-label use and carries real risk:
+
+- Anti-cheat may flag the kretprobe-driven syscall divergence (paths visible
+  to the system but invisible to the target UID) as a kernel-level cheat
+  signal.
+- Detected accounts can be temporarily or permanently banned, and on some
+  titles the ban can extend to the device or hardware fingerprint.
+- We do not test against any game's anti-cheat and will not patch around
+  detection updates.
+
+If you choose to use PathMask in that scenario anyway, you accept full
+responsibility for any account or hardware consequences.
+
 ## What It Builds
 
 - `kernel/pathmask.c`: kernel module source.
