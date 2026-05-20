@@ -435,6 +435,153 @@ static int getattr_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 	return 0;
 }
 
+/*
+ * Even though `vfs_getattr` and `inode_permission` are EXPORT_SYMBOL on GKI
+ * 5.15+ and our kretprobe attaches to them, ThinLTO can still inline copies
+ * of them into in-kernel callers (e.g. vfs_statx). The kallsyms entry remains
+ * valid for module use, but no in-kernel call site actually goes through it,
+ * so the kretprobe never fires for stat()/statx()/access(). Symbol export
+ * does not imply inline immunity on LTO kernels.
+ *
+ * The arm64 syscall entry stubs (`__arm64_sys_*`) are different: they are
+ * stored as function pointers in `sys_call_table[]`, so the linker is forced
+ * to keep an out-of-line copy at a fixed address. They sit at the very top
+ * of the syscall path, before any inlined VFS dispatch. Hooking them gives
+ * a guaranteed interception point for the metadata-leaking syscalls.
+ *
+ * We deliberately do NOT hook `__arm64_sys_openat` here: kretprobe runs at
+ * function exit, by which point a successful openat() has already allocated
+ * an fd in the caller's table. Overriding the return value to -ENOENT would
+ * leak that fd. openat() is left to the existing `inode_permission` hook,
+ * which fires during path walk before the file table is touched.
+ */
+struct syscall_match_data {
+	bool matched;
+};
+
+static struct pm_syscall_probe {
+	const char *symbol;
+	struct kretprobe rp;
+	bool registered;
+} pm_syscall_probes[] = {
+	{ .symbol = "__arm64_sys_newfstatat" },
+	{ .symbol = "__arm64_sys_statx" },
+	{ .symbol = "__arm64_sys_faccessat" },
+	{ .symbol = "__arm64_sys_faccessat2" },
+	{ .symbol = "__arm64_sys_readlinkat" },
+};
+
+static atomic_t pm_syscall_seen = ATOMIC_INIT(0);
+
+static bool sys_path_matches_target(const char *p)
+{
+	unsigned int i;
+
+	if (!p || p[0] != '/')
+		return false;
+
+	for (i = 0; i < target_count; i++) {
+		size_t plen = strlen(targets[i].path);
+
+		if (!plen)
+			continue;
+		if (strncmp(p, targets[i].path, plen) == 0) {
+			char next = p[plen];
+
+			if (next == '\0' || next == '/')
+				return true;
+		}
+	}
+	return false;
+}
+
+static int sys_path_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	struct syscall_match_data *d = (struct syscall_match_data *)ri->data;
+	struct pt_regs *user_regs = (struct pt_regs *)regs->regs[0];
+	char buf[TARGET_TEXT_LEN];
+	long len;
+
+	d->matched = false;
+
+	if (!user_regs || !should_hide_for_current())
+		return 0;
+
+	/*
+	 * All hooked syscalls share the same prefix:
+	 *   sys_xxxat(int dfd, const char __user *filename, ...)
+	 * so the user filename pointer always lands in user_regs->regs[1].
+	 */
+	len = strncpy_from_user(buf, (const char __user *)user_regs->regs[1],
+				sizeof(buf));
+	if (len <= 0)
+		return 0;
+	buf[sizeof(buf) - 1] = '\0';
+
+	if (!sys_path_matches_target(buf))
+		return 0;
+
+	d->matched = true;
+	if (atomic_cmpxchg(&pm_syscall_seen, 0, 1) == 0)
+		pr_info(PM_LOG_PREFIX
+			"syscall path hook fired (first time)\n");
+	return 0;
+}
+
+static int sys_path_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	struct syscall_match_data *d = (struct syscall_match_data *)ri->data;
+
+	if (d->matched)
+		regs_set_return_value(regs, -ENOENT);
+	return 0;
+}
+
+static void register_syscall_hooks(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++) {
+		struct pm_syscall_probe *p = &pm_syscall_probes[i];
+		int ret;
+
+		p->rp.kp.symbol_name = p->symbol;
+		p->rp.entry_handler = sys_path_entry;
+		p->rp.handler = sys_path_exit;
+		p->rp.data_size = sizeof(struct syscall_match_data);
+		p->rp.maxactive = 40;
+
+		ret = register_kretprobe(&p->rp);
+		if (ret) {
+			/*
+			 * Some older kernels lack faccessat2 etc. Tolerate
+			 * per-symbol failure: keep the rest of the syscall
+			 * hooks active and just log the missing one.
+			 */
+			pr_warn(PM_LOG_PREFIX
+				"register_kretprobe(%s) failed: %d (skip)\n",
+				p->symbol, ret);
+			continue;
+		}
+		p->registered = true;
+		pr_info(PM_LOG_PREFIX "hooked %s\n", p->symbol);
+	}
+}
+
+static void unregister_syscall_hooks(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++) {
+		struct pm_syscall_probe *p = &pm_syscall_probes[i];
+
+		if (p->registered) {
+			unregister_kretprobe(&p->rp);
+			p->registered = false;
+		}
+	}
+}
+
 #define GETDENTS_BUF_LIMIT 65536u
 
 static struct kretprobe kp_getdents;
@@ -603,6 +750,8 @@ static int __init pathmask_init(void)
 	}
 	pr_info(PM_LOG_PREFIX "hooked vfs_getattr\n");
 
+	register_syscall_hooks();
+
 	if (hide_dirents) {
 		kp_getdents.kp.symbol_name = "__arm64_sys_getdents64";
 		kp_getdents.entry_handler = getdents_entry;
@@ -633,6 +782,7 @@ static void __exit pathmask_exit(void)
 {
 	unregister_kretprobe(&kp_inode_perm);
 	unregister_kretprobe(&kp_inode_getattr);
+	unregister_syscall_hooks();
 	if (getdents_registered) {
 		unregister_kretprobe(&kp_getdents);
 		getdents_registered = false;
