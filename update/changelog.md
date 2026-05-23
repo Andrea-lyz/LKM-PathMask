@@ -1,124 +1,28 @@
 # PathMask 2.2.8
 
-## Dynamic target paths (Scene 9.3.0+ random debugfs mount)
+## 解决了什么
 
-Scene 9.3.0 Alpha13 stopped mounting its debugfs at the fixed
-`/dev/scene` and now uses `/dev/<8-char-hash>/debug` with the marker
-file at `/dev/<hash>/scene_mode_category`. The hash is regenerated on
-every device boot (verified: same after `am force-stop` + relaunch,
-different after `reboot`), so a fixed entry in `target_path.conf` is
-no longer enough.
+- 修复 Holmes「Abnormal Environment (04)」、Hunter「侧信道延迟过高」等基于系统调用时延的环境检测会误报的问题。问题由 v2.2.5 / v2.2.7 引入的多个 syscall 入口 hook 导致，hook 引入的纳秒级开销会被这些检测器统计出来。默认配置已把高频热路径上的 hook 关掉，原有的隐藏效果保留。
+- 修复 Scene 9.3.0 Alpha13 升级后，原有 `/dev/scene` 检测路径变为随机父目录 `/dev/<8 字符>/scene_mode_category` 后无法继续隐藏的问题。Duck Detector 也针对此发了 PR 检测随机路径。新增动态路径语法解决这一问题。
 
-Duck Detector PR #44 exploits this by parsing `/proc/self/mountinfo`
-to learn the current hash, then running a three-step existence
-check on the marker file: `access(F_OK)`, `mkdir(EEXIST)` side-channel,
-`stat(EACCES)` side-channel. Hiding *the marker file* defeats only
-`access(F_OK)`; the other two return `EEXIST` / `EACCES` because the
-file is still really there. Hiding *the parent directory* (the random
-hash dir) defeats all three because `mkdir` and `stat` both bottom
-out at `ENOENT` when the parent doesn't exist.
+## 新增功能
 
-- New `???` syntax in `target_path.conf` (and the WebUI path list).
-  `???` matches any single path segment (the same semantics as a
-  shell `*` that doesn't cross `/`). It's a friendly alias users
-  don't have to remember as glob syntax: write what you mean.
-  Example: `/dev/???/scene_mode_category`.
-- New `dir:` line prefix instructs the kernel to hide the *parent
-  directory* of each match rather than the match itself. Combined
-  with `???`, `dir:/dev/???/scene_mode_category` makes the random
-  hash dir disappear for every UID in deny scope, taking the marker
-  file and the rest of Scene's debugfs subtree with it.
-- WebUI path rows gain a "父级" checkbox. Add a row, paste your
-  path/glob, tick the box if the kernel should hide the parent.
-- `service.sh` re-expands glob lines on every wait-loop iteration so
-  late-mounted dynamic paths get picked up the moment they appear,
-  without needing a watcher process.
-- `service.sh` distinguishes literal lines (must exist or boot wait
-  burns its full timeout) from glob lines (matching nothing is a
-  valid steady state, e.g. Scene not installed). Devices without
-  Scene 9.3.0+ pay no boot-wait penalty for the bundled default.
-- Default `target_path.conf` ships with both
-  `/dev/scene` (Scene 8.x) and `dir:/dev/???/scene_mode_category`
-  (Scene 9.3.0+). The 8.x line silently no-ops on 9.3.0+ devices and
-  vice versa.
-- `MAX_HIDE_TARGETS` raised from 16 to 64 to accommodate runtime
-  glob expansion across multiple boots and edge cases.
+- **动态路径通配**：在 `target_path.conf` 中可以使用 `???` 通配任意一段路径（不跨 `/`）。例如 `/dev/???/scene_mode_category` 可以命中任意 `/dev/<某个目录>/scene_mode_category`。WebUI 隐藏路径列表也支持此语法。
+- **隐藏父目录**：在路径前加 `dir:` 前缀，命中后隐藏的是匹配项的父目录而非匹配项本身。这能应对那些用「先确认父目录在不在再确认文件是否存在」的检测器。WebUI 路径行新增「父级」复选框对应此功能。
+- **OR 分组**：路径前加 `any:<组名>:` 前缀，同名组内任一行命中即视为该组满足，配合上面两个语法可以一次写多套同效路径。开机时只要任一命中就立即加载，避免在不存在的设备上空等。WebUI 路径行新增「组」字段。
+- **增强 syscall 兜底开关**：极端情况下需要更激进的隐藏覆盖时可以打开此开关；默认关闭，开启后会被多数环境检测识别为异常，不推荐开启。
 
-中文说明：
+## 默认配置变化
 
-## 动态目标路径（Scene 9.3.0+ 随机 debugfs 挂载点）
+- 新增 Scene 9.3.0+ 路径默认配置，与原有 `/dev/scene` 同属 `scene` 组，老新版本 Scene 都能命中。没装 Scene 的设备也不会因此拖慢开机。
+- `deny_packages.conf` 内置 `me.garfieldhan.holmes`。如果你没装 Holmes，删掉这一行即可。
 
-Scene 9.3.0 Alpha13 起，debugfs 挂载点从固定的 `/dev/scene` 改为
-`/dev/<8 字符 hash>/debug`，marker 文件位于
-`/dev/<hash>/scene_mode_category`。实测 hash 每次设备开机都会重新
-生成（应用强制结束后重启不变，整机重启会变），固定写在
-`target_path.conf` 里已经不够用。
+## WebUI 优化
 
-Duck Detector PR #44 的应对思路是：先解析 `/proc/self/mountinfo`
-拿到当前 hash，再用三连击验证 marker 是否存在 ——
-`access(F_OK)` 拿到 ENOENT 不停手、`mkdir` 边信道（已存在文件返回
-EEXIST 而不是 EACCES）、`stat` 边信道（拿到 EACCES 表示文件存在
-但元数据被禁）。**仅隐藏 marker 文件**只能挡住 `access`；后两条
-依然能看到文件，因为它确实还在。**隐藏父目录**（随机 hash 目录
-本身）才能让 `mkdir` 和 `stat` 都因为父不存在而返回 ENOENT，三连击
-全部失效。
-
-- `target_path.conf` 和 WebUI 隐藏路径列表新增 `???` 通配语法。
-  `???` 通配任意一段路径（语义等同 shell `*` 但不跨 `/`），把检测
-  方常用的 fnmatch / regex 思维翻译成对用户友好的"想到什么写
-  什么"。例：`/dev/???/scene_mode_category`。
-- 新增 `dir:` 行前缀，命中 glob 时隐藏父目录而非命中项本身。和
-  `???` 配合，`dir:/dev/???/scene_mode_category` 直接让随机 hash
-  目录在 deny 范围内消失，marker 文件和 Scene 整个 debugfs 子树
-  一并不可见。
-- WebUI 路径行增加「父级」复选框。添加一行 → 粘贴路径或 glob →
-  需要隐藏父目录就勾上。
-- `service.sh` 在等待循环每次迭代重新展开 glob，启动后期才挂载
-  的动态路径出现的瞬间就被纳入，不需要常驻 watcher 进程。
-- `service.sh` 区分字面路径（必须存在，否则等待循环跑满超时）和
-  glob 路径（匹配 0 条是正常稳态，比如没装 Scene）。没装 Scene
-  9.3.0+ 的设备不会因为新增默认配置而拖慢开机。
-- 默认 `target_path.conf` 同时带 `/dev/scene`（Scene 8.x）和
-  `dir:/dev/???/scene_mode_category`（Scene 9.3.0+），互不打架，
-  对方不在场就静默跳过。
-- `MAX_HIDE_TARGETS` 从 16 提到 64，预留 glob 展开余量。
-
-## Holmes "Abnormal Environment (04)" — actual fix
-
-Bisection across v2.2.0 → v2.2.7 narrowed the regression to **v2.2.5**, the version that introduced the five `__arm64_sys_*` kretprobes (`newfstatat`, `statx`, `faccessat`, `faccessat2`, `readlinkat`). v2.2.7 then added `__arm64_sys_openat` / `openat2` on the same hot path. Static analysis of `libholmes.so` (~56 MB, OLLVM-class obfuscation, no `pathmask` / `nohello` / `/proc/modules` / `/proc/self/maps` literals — confirming string encryption rather than a name-based dictionary), combined with a clean `/proc/<pid>/maps` for `me.garfieldhan.holmes_zygote` (no `/data/adb`, no zygisk so), and the bisection point pointing exactly at "syscall hot-path probes added", indicate the detector is **timing-based**: a tight `stat()` / `access()` loop measured against a baseline. The arm64 kretprobe entry+exit trampoline costs hundreds of nanoseconds to ~1 µs per call regardless of the entry handler's verdict, which a per-call benchmark loop with N≥100 picks up reliably.
-
-- Add `enable_syscall_hooks` module parameter (bool, default **0**). When 0, the seven `__arm64_sys_*` kretprobes are not registered at all; `inode_permission`, `vfs_getattr`, and `__arm64_sys_getdents64` remain hooked unconditionally.
-- The default behaviour now matches v2.2.4 from a syscall-visibility standpoint, so timing-based environment probes (Holmes' Abnormal Environment 04 and similar) no longer trip. The v2.2.4 → v2.2.7 fixes for ThinLTO-inlined kretprobe targets, the openat fd-leak handling, and the GKI 5.15 / CFI / argument-register-shift work all stay in place — only the registration of the syscall hot-path probes is now opt-in.
-- Users who hit a detector that bypasses `inode_permission` / `vfs_getattr` via ThinLTO inlining and need the stronger coverage can flip `enable_syscall_hooks=1` (KSU module: `enable_syscall_hooks.conf`, WebUI: 增强 syscall 兜底 toggle).
-- `service.sh` reads the new `enable_syscall_hooks.conf`, normalizes it (accepts `0/1/true/false/yes/no/on/off`), and passes the result to `insmod`.
-- WebUI: new toggle "增强 syscall 兜底" with explicit warning text. Save / 保存并热重载 / 恢复默认 all write the new conf.
-- `tools/package_ksu.{ps1,sh}` accept `-EnableSyscallHooks` / `ENABLE_SYSCALL_HOOKS=`.
-
-## App Zygote isolated UID range coverage (kept)
-
-- Fix a separate, real coverage gap unrelated to Holmes: `is_android_isolated_uid()` previously only matched the regular isolated UID range `99000-99999` (`FIRST/LAST_ISOLATED_UID` from `frameworks/base android/os/Process.java`). App Zygote isolated services declared with `android:useAppZygote="true"` use a different range `90000-98999` (`FIRST/LAST_APP_ZYGOTE_ISOLATED_UID`, with `NUM_UIDS_PER_APP_ZYGOTE = 100` per app). Without that range in `should_hide_for_current()`, the preload callback running on the App Zygote process was outside `hide_isolated` scope.
-- `is_android_isolated_uid()` now matches both ranges. Existing config keeps working: `hide_isolated=1` (the default) automatically covers App Zygote services without any extra UID list. This change is a coverage improvement; on its own it does **not** fix Holmes 04 (Holmes runs its `holmes_zygote` under the *application's* normal UID, not 90000-98999, per `ps -A` evidence — the App Zygote child UID range applies to the forked isolated service, not the App Zygote process itself).
-- `deny_packages.conf` ships with `me.garfieldhan.holmes` added so the main app process is in deny scope when `MainActivity` reads back the preload state via Binder. Drops `me.garfieldhan.holmes` if you don't have Holmes installed.
-
-中文说明：
-
-## Holmes "Abnormal Environment (04)" 真实修复
-
-对 v2.2.0 → v2.2.7 做版本 bisect，问题被定位到 **v2.2.5**：那一版引入了 5 个 `__arm64_sys_*` kretprobe（`newfstatat`、`statx`、`faccessat`、`faccessat2`、`readlinkat`），v2.2.7 又在同一条热路径上加了 `__arm64_sys_openat` / `openat2`。对 `libholmes.so`（约 56 MB，OLLVM 级混淆，静态字符串里**找不到** `pathmask` / `nohello` / `/proc/modules` / `/proc/self/maps` —— 这是字符串加密的特征，不是名字字典），加上 `me.garfieldhan.holmes_zygote` 的 `/proc/<pid>/maps` 是**干净的**（没有 `/data/adb`、没有 zygisk so），三条证据合起来说明：检测是**纯系统调用时延统计**，类似 `for (i=0; i<N; i++) stat(...)` 这种基准测试。kretprobe 在 arm64 上的 entry+exit trampoline 不论 handler 内部判断结果如何，每次调用都要付出几百纳秒到 1 微秒级的开销，N≥100 的循环就能稳定打出来。
-
-- 新增模块参数 `enable_syscall_hooks`（bool，默认 **0**）。为 0 时这 7 个 `__arm64_sys_*` kretprobe 完全不注册；`inode_permission` / `vfs_getattr` / `__arm64_sys_getdents64` 不变，始终挂载。
-- 默认行为从 syscall 可见性角度回到 v2.2.4，所以基于时延的环境检测（Holmes Abnormal Environment 04 等）不再触发。v2.2.4 → v2.2.7 那波修复（ThinLTO 内联兜底、openat fd 泄漏处理、GKI 5.15 / CFI / 参数寄存器位移）全部保留 —— **只有热路径 syscall hook 的注册改为选项式**。
-- 如果你确实遇到某个 detector 通过 ThinLTO 把 `inode_permission` / `vfs_getattr` 内联绕过了，可以打开 `enable_syscall_hooks=1`（KSU 模块：`enable_syscall_hooks.conf`，WebUI：「增强 syscall 兜底」开关）。
-- `service.sh` 读取新的 `enable_syscall_hooks.conf`，归一化（接受 `0/1/true/false/yes/no/on/off`），结果透传给 `insmod`。
-- WebUI 新增「增强 syscall 兜底」开关，附明确警告。保存 / 保存并热重载 / 恢复默认都会写这个 conf。
-- `tools/package_ksu.{ps1,sh}` 支持 `-EnableSyscallHooks` / `ENABLE_SYSCALL_HOOKS=`。
-
-## App Zygote 隔离 UID 区段覆盖（保留）
-
-- 修复一处与 Holmes 无关、独立存在的真实覆盖盲区：`is_android_isolated_uid()` 原先只匹配标准隔离 UID 区段 `99000-99999`（`FIRST/LAST_ISOLATED_UID`，见 `frameworks/base android/os/Process.java`）。声明了 `android:useAppZygote="true"` 的隔离服务用的是另一段 `90000-98999`（`FIRST/LAST_APP_ZYGOTE_ISOLATED_UID`，每个 app 占 `NUM_UIDS_PER_APP_ZYGOTE = 100` 个 UID）。这一段没纳入 `should_hide_for_current()`，导致这种服务跑在 deny 范围之外。
-- `is_android_isolated_uid()` 现在两段都匹配。配置不变：`hide_isolated=1`（默认开）就会自动覆盖 App Zygote 服务。这是一个覆盖度改进；**单凭这个并不修复 Holmes 04**——`ps -A` 实测 Holmes 的 `holmes_zygote` 跑在主应用 UID（10587）下，不是 90000-98999；那段 UID 是 App Zygote **派生出去的隔离服务**才用的。
-- `deny_packages.conf` 内置加上 `me.garfieldhan.holmes`，主进程非隔离的那一份在 `MainActivity` 通过 Binder 回读 preload 状态时也能被覆盖。如果你没装 Holmes，删掉这一行。
-
+- 简化隐藏路径配置面板，新增信息按钮（ⓘ），点击后弹出说明面板介绍路径语法、`???` 通配、组、父级等用法。
+- 路径行重新布局为「路径 / 组 / 父级 / 删除」四列结构，上方有列标题。
+- 修复多处中文长串导致页面横向滚动、UTF-8 编码偶发解析失败、状态栏卡死无提示等问题。
+- 诊断报告区分字面路径和动态路径的存在性判定，不再把 `???` 通配行误报为 MISS。
 
 # PathMask 2.2.7
 
