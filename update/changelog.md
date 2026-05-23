@@ -1,5 +1,88 @@
 # PathMask 2.2.8
 
+## Dynamic target paths (Scene 9.3.0+ random debugfs mount)
+
+Scene 9.3.0 Alpha13 stopped mounting its debugfs at the fixed
+`/dev/scene` and now uses `/dev/<8-char-hash>/debug` with the marker
+file at `/dev/<hash>/scene_mode_category`. The hash is regenerated on
+every device boot (verified: same after `am force-stop` + relaunch,
+different after `reboot`), so a fixed entry in `target_path.conf` is
+no longer enough.
+
+Duck Detector PR #44 exploits this by parsing `/proc/self/mountinfo`
+to learn the current hash, then running a three-step existence
+check on the marker file: `access(F_OK)`, `mkdir(EEXIST)` side-channel,
+`stat(EACCES)` side-channel. Hiding *the marker file* defeats only
+`access(F_OK)`; the other two return `EEXIST` / `EACCES` because the
+file is still really there. Hiding *the parent directory* (the random
+hash dir) defeats all three because `mkdir` and `stat` both bottom
+out at `ENOENT` when the parent doesn't exist.
+
+- New `???` syntax in `target_path.conf` (and the WebUI path list).
+  `???` matches any single path segment (the same semantics as a
+  shell `*` that doesn't cross `/`). It's a friendly alias users
+  don't have to remember as glob syntax: write what you mean.
+  Example: `/dev/???/scene_mode_category`.
+- New `dir:` line prefix instructs the kernel to hide the *parent
+  directory* of each match rather than the match itself. Combined
+  with `???`, `dir:/dev/???/scene_mode_category` makes the random
+  hash dir disappear for every UID in deny scope, taking the marker
+  file and the rest of Scene's debugfs subtree with it.
+- WebUI path rows gain a "父级" checkbox. Add a row, paste your
+  path/glob, tick the box if the kernel should hide the parent.
+- `service.sh` re-expands glob lines on every wait-loop iteration so
+  late-mounted dynamic paths get picked up the moment they appear,
+  without needing a watcher process.
+- `service.sh` distinguishes literal lines (must exist or boot wait
+  burns its full timeout) from glob lines (matching nothing is a
+  valid steady state, e.g. Scene not installed). Devices without
+  Scene 9.3.0+ pay no boot-wait penalty for the bundled default.
+- Default `target_path.conf` ships with both
+  `/dev/scene` (Scene 8.x) and `dir:/dev/???/scene_mode_category`
+  (Scene 9.3.0+). The 8.x line silently no-ops on 9.3.0+ devices and
+  vice versa.
+- `MAX_HIDE_TARGETS` raised from 16 to 64 to accommodate runtime
+  glob expansion across multiple boots and edge cases.
+
+中文说明：
+
+## 动态目标路径（Scene 9.3.0+ 随机 debugfs 挂载点）
+
+Scene 9.3.0 Alpha13 起，debugfs 挂载点从固定的 `/dev/scene` 改为
+`/dev/<8 字符 hash>/debug`，marker 文件位于
+`/dev/<hash>/scene_mode_category`。实测 hash 每次设备开机都会重新
+生成（应用强制结束后重启不变，整机重启会变），固定写在
+`target_path.conf` 里已经不够用。
+
+Duck Detector PR #44 的应对思路是：先解析 `/proc/self/mountinfo`
+拿到当前 hash，再用三连击验证 marker 是否存在 ——
+`access(F_OK)` 拿到 ENOENT 不停手、`mkdir` 边信道（已存在文件返回
+EEXIST 而不是 EACCES）、`stat` 边信道（拿到 EACCES 表示文件存在
+但元数据被禁）。**仅隐藏 marker 文件**只能挡住 `access`；后两条
+依然能看到文件，因为它确实还在。**隐藏父目录**（随机 hash 目录
+本身）才能让 `mkdir` 和 `stat` 都因为父不存在而返回 ENOENT，三连击
+全部失效。
+
+- `target_path.conf` 和 WebUI 隐藏路径列表新增 `???` 通配语法。
+  `???` 通配任意一段路径（语义等同 shell `*` 但不跨 `/`），把检测
+  方常用的 fnmatch / regex 思维翻译成对用户友好的"想到什么写
+  什么"。例：`/dev/???/scene_mode_category`。
+- 新增 `dir:` 行前缀，命中 glob 时隐藏父目录而非命中项本身。和
+  `???` 配合，`dir:/dev/???/scene_mode_category` 直接让随机 hash
+  目录在 deny 范围内消失，marker 文件和 Scene 整个 debugfs 子树
+  一并不可见。
+- WebUI 路径行增加「父级」复选框。添加一行 → 粘贴路径或 glob →
+  需要隐藏父目录就勾上。
+- `service.sh` 在等待循环每次迭代重新展开 glob，启动后期才挂载
+  的动态路径出现的瞬间就被纳入，不需要常驻 watcher 进程。
+- `service.sh` 区分字面路径（必须存在，否则等待循环跑满超时）和
+  glob 路径（匹配 0 条是正常稳态，比如没装 Scene）。没装 Scene
+  9.3.0+ 的设备不会因为新增默认配置而拖慢开机。
+- 默认 `target_path.conf` 同时带 `/dev/scene`（Scene 8.x）和
+  `dir:/dev/???/scene_mode_category`（Scene 9.3.0+），互不打架，
+  对方不在场就静默跳过。
+- `MAX_HIDE_TARGETS` 从 16 提到 64，预留 glob 展开余量。
+
 ## Holmes "Abnormal Environment (04)" — actual fix
 
 Bisection across v2.2.0 → v2.2.7 narrowed the regression to **v2.2.5**, the version that introduced the five `__arm64_sys_*` kretprobes (`newfstatat`, `statx`, `faccessat`, `faccessat2`, `readlinkat`). v2.2.7 then added `__arm64_sys_openat` / `openat2` on the same hot path. Static analysis of `libholmes.so` (~56 MB, OLLVM-class obfuscation, no `pathmask` / `nohello` / `/proc/modules` / `/proc/self/maps` literals — confirming string encryption rather than a name-based dictionary), combined with a clean `/proc/<pid>/maps` for `me.garfieldhan.holmes_zygote` (no `/data/adb`, no zygisk so), and the bisection point pointing exactly at "syscall hot-path probes added", indicate the detector is **timing-based**: a tight `stat()` / `access()` loop measured against a baseline. The arm64 kretprobe entry+exit trampoline costs hundreds of nanoseconds to ~1 µs per call regardless of the entry handler's verdict, which a per-call benchmark loop with N≥100 picks up reliably.

@@ -11,6 +11,7 @@ const LOG_PAGE_LINES = 80;
 const DEFAULT_TARGET_PATHS = [
 	"/dev/cpuset/scene-daemon",
 	"/dev/scene",
+	"dir:/dev/???/scene_mode_category",
 	"/system_ext/app/SoterService",
 ];
 
@@ -201,28 +202,68 @@ function renderPaths(paths) {
 	for (const path of list) addPathRow(path);
 }
 
+// A target_path.conf line is either a literal path
+// (`/system_ext/app/SoterService`), a glob pattern using `???` for any
+// path segment (`/dev/???/scene_mode_category`), or either of the above
+// prefixed with `dir:` to instruct the kernel to hide the *parent
+// directory* of each match rather than the match itself. For dynamic
+// paths (Scene 9.3.0+ randomises its debugfs mount under
+// `/dev/<8-char-hash>/...`), `dir:` plus the marker file is the only
+// strategy that defeats the standard mkdir(EEXIST)/stat(EACCES)
+// existence side-channels Detectors use, because the parent directory
+// itself disappears.
+function splitTargetLine(raw) {
+	const trimmed = (raw || "").trim();
+	if (trimmed.startsWith("dir:")) {
+		return { useParent: true, path: trimmed.slice(4).trim() };
+	}
+	return { useParent: false, path: trimmed };
+}
+
+function joinTargetLine(path, useParent) {
+	const p = (path || "").trim();
+	if (!p) return "";
+	return useParent ? `dir:${p}` : p;
+}
+
 function addPathRow(value = "") {
+	const { useParent, path } = splitTargetLine(value);
+
 	const row = document.createElement("div");
 	row.className = "pathRow";
 
 	const input = document.createElement("input");
 	input.type = "text";
-	input.value = value;
-	input.placeholder = "/system/app/example";
+	input.value = path;
+	input.placeholder = "/system/app/example 或 /dev/???/marker";
+
+	const dirToggle = document.createElement("label");
+	dirToggle.className = "pathRowDirToggle";
+	dirToggle.title = "勾选后隐藏匹配项的父目录（dir:）。对随机父目录场景必须勾选";
+	const dirCheckbox = document.createElement("input");
+	dirCheckbox.type = "checkbox";
+	dirCheckbox.checked = useParent;
+	const dirLabel = document.createElement("span");
+	dirLabel.textContent = "父级";
+	dirToggle.append(dirCheckbox, dirLabel);
 
 	const remove = document.createElement("button");
 	remove.type = "button";
 	remove.textContent = "删";
 	remove.addEventListener("click", () => row.remove());
 
-	row.append(input, remove);
+	row.append(input, dirToggle, remove);
 	pathList.append(row);
 	input.focus();
 }
 
 function collectPaths() {
-	return [...pathList.querySelectorAll("input")]
-		.map((input) => input.value.trim())
+	return [...pathList.querySelectorAll(".pathRow")]
+		.map((row) => {
+			const input = row.querySelector('input[type="text"]');
+			const dirCheckbox = row.querySelector('input[type="checkbox"]');
+			return joinTargetLine(input?.value, dirCheckbox?.checked);
+		})
 		.filter(Boolean);
 }
 
@@ -704,10 +745,43 @@ async function refreshTargetProbe() {
 	lastSnapshot.targetProbeHidden = false;
 	lastSnapshot.targetResolvedCount = -1;
 
-	const body = paths.map((path) => (
-		`if [ -e ${shellQuote(path)} ]; then echo OK ${shellQuote(path)}; else echo MISS ${shellQuote(path)}; fi`
-	)).join("; ");
-	lastSnapshot.targetProbe = await safeExec(body);
+	/*
+	 * Build a probe per raw line. Three cases:
+	 *   - literal `/foo/bar`       → `[ -e /foo/bar ]`
+	 *   - glob   `/dev/???/marker` → `ls -d /dev/*/marker 2>/dev/null` (any
+	 *                                hit means the line resolves)
+	 *   - `dir:` prefix            → strip prefix, then test the path
+	 *                                that produces the parent the kernel
+	 *                                will actually hide
+	 *
+	 * `???` is our user-facing alias for `*` so it doesn't get spooked
+	 * by detector docs that only ever mention regex / fnmatch syntax.
+	 * Translate it before sending to shell.
+	 */
+	const probes = paths.map((rawLine) => {
+		const { path } = splitTargetLine(rawLine);
+		const shellPattern = path.replaceAll("???", "*");
+		const isGlob = /[*?[]/.test(shellPattern);
+		const tag = shellQuote(rawLine);
+		if (isGlob) {
+			// Reject patterns containing shell-active characters other
+			// than the glob metas themselves -- nobody should be
+			// putting backticks or ${} in a target path, and feeding
+			// them unquoted to the shell would be a vulnerability if
+			// somebody ever wrote to target_path.conf from a less
+			// trusted source. Render unsafe lines as MISS rather than
+			// executing them.
+			if (/[\s'"`$\\;|&><(){}\n]/.test(shellPattern)) {
+				return `echo "MISS ${shellQuote(rawLine + ' (unsafe glob)')}"`;
+			}
+			// `compgen -G` would be cleaner but isn't reliable on every
+			// Android shell; a direct glob with a no-match guard works
+			// across toybox/mksh/bash.
+			return `if ls -d ${shellPattern} >/dev/null 2>&1; then echo OK ${tag}; else echo MISS ${tag}; fi`;
+		}
+		return `if [ -e ${shellQuote(path)} ]; then echo OK ${tag}; else echo MISS ${tag}; fi`;
+	}).join("; ");
+	lastSnapshot.targetProbe = await safeExec(probes);
 }
 
 async function validateConfig(options = {}) {
@@ -725,17 +799,18 @@ async function validateConfig(options = {}) {
 		errors.push("隐藏路径为空。");
 	}
 
-	for (const path of paths) {
+	for (const rawLine of paths) {
+		const { path } = splitTargetLine(rawLine);
 		if (!path.startsWith("/")) {
-			errors.push(`隐藏路径必须是绝对路径：${path}`);
+			errors.push(`隐藏路径必须是绝对路径：${rawLine}`);
 		}
-		if (path.includes(",")) {
-			errors.push(`隐藏路径不能包含英文逗号：${path}`);
+		if (rawLine.includes(",")) {
+			errors.push(`隐藏路径不能包含英文逗号：${rawLine}`);
 		}
-		if (seenPaths.has(path)) {
-			warnings.push(`重复路径会被重复传入内核：${path}`);
+		if (seenPaths.has(rawLine)) {
+			warnings.push(`重复路径会被重复传入内核：${rawLine}`);
 		}
-		seenPaths.add(path);
+		seenPaths.add(rawLine);
 	}
 
 	for (const uid of directUids) {

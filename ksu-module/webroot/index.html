@@ -55,6 +55,9 @@
 					<h2>隐藏路径</h2>
 					<button id="addPathBtn" type="button">添加</button>
 				</div>
+				<p class="hint">
+					支持字面路径（如 <code>/system_ext/app/SoterService</code>）和动态匹配。<code>???</code> 通配任意一段路径，例如 <code>/dev/???/scene_mode_category</code> 可命中 Scene 9.3.0+ 随机生成的 <code>/dev/&lt;hash&gt;/scene_mode_category</code>。勾选「父级」后隐藏命中项的父目录，对随机父目录场景应勾选。
+				</p>
 				<div id="pathList" class="stack"></div>
 			</section>
 

@@ -25,9 +25,9 @@
 #include <linux/uaccess.h>
 
 #define PM_LOG_PREFIX "pathmask: "
-#define MAX_HIDE_TARGETS 16
+#define MAX_HIDE_TARGETS 64
 #define MAX_DENY_UIDS 128
-#define TARGET_PATHS_LEN 2048
+#define TARGET_PATHS_LEN 4096
 #define TARGET_TEXT_LEN 256
 #define UID_LIST_LEN 2048
 #define ANDROID_USER_OFFSET 100000u

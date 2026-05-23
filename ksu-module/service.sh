@@ -206,11 +206,148 @@ add_target_path() {
 		return
 	fi
 
+	# Dedup: skip if this exact literal path is already in the list. Two
+	# different glob patterns can resolve to the same parent dir (e.g.
+	# `dir:/dev/???/marker-a` and `dir:/dev/???/marker-b` both yielding
+	# `/dev/<hash>`), and the kernel's MAX_HIDE_TARGETS is finite, so we
+	# don't want to burn slots on duplicates.
+	case ",$TARGET_PATHS," in
+		*,"$CANDIDATE_PATH",*)
+			return
+			;;
+	esac
+
 	if [ -z "$TARGET_PATHS" ]; then
 		TARGET_PATHS="$CANDIDATE_PATH"
 	else
 		TARGET_PATHS="$TARGET_PATHS,$CANDIDATE_PATH"
 	fi
+}
+
+# Configured raw lines (one per line of target_path.conf, unexpanded).
+# Wait/insmod logic re-expands these on every loop so newly-appeared
+# Scene-style /dev/<hash>/... paths get picked up between boot phases.
+TARGET_RAW_LINES=""
+
+add_target_raw_line() {
+	RAW_LINE="$1"
+
+	[ -z "$RAW_LINE" ] && return
+
+	if [ -z "$TARGET_RAW_LINES" ]; then
+		TARGET_RAW_LINES="$RAW_LINE"
+	else
+		TARGET_RAW_LINES="$TARGET_RAW_LINES
+$RAW_LINE"
+	fi
+}
+
+# Returns 0 if the raw config line is a glob (contains the `???` marker
+# or any of the standard shell glob metachars `?` `*` `[`), 1 otherwise.
+# We accept `???` as a user-friendly synonym for `*` (matches any single
+# path segment) because shell `*` in path context still doesn't cross
+# `/`, and a literal `*` in a config file looks alarming. See
+# expand_target_line() for the substitution.
+is_glob_line() {
+	LINE="$1"
+	# Strip "dir:" prefix before glob detection.
+	case "$LINE" in
+		dir:*) LINE="${LINE#dir:}" ;;
+	esac
+	case "$LINE" in
+		*'???'*|*'*'*|*'?'*|*'['*) return 0 ;;
+	esac
+	return 1
+}
+
+# Expand a single raw config line into one or more literal paths and
+# add each to TARGET_PATHS. Recognises:
+#   - `dir:` prefix → emit the parent directory of each match
+#   - `???`         → replaced with `*` (any non-`/` characters)
+#   - shell `?`/`*`/`[abc]` → forwarded to shell glob unchanged
+# A line without any glob markers is treated as a literal path. Glob
+# lines that match nothing are silently skipped (this is normal: the
+# bundled Scene 9.3.0 default doesn't match on devices without Scene).
+expand_target_line() {
+	RAW="$1"
+	USE_PARENT=0
+
+	case "$RAW" in
+		dir:*)
+			USE_PARENT=1
+			RAW="${RAW#dir:}"
+			;;
+	esac
+
+	[ -z "$RAW" ] && return
+
+	# Translate the friendly `???` marker into the shell-glob `*`. We do
+	# this via parameter substitution rather than `sed` so it works in
+	# the early boot environment where /system/bin/sed is not yet
+	# guaranteed to be on PATH (depends on init order / SELinux phase).
+	PATTERN="$RAW"
+	while :; do
+		case "$PATTERN" in
+			*'???'*) PATTERN="${PATTERN%%'???'*}*${PATTERN#*'???'}" ;;
+			*) break ;;
+		esac
+	done
+
+	if is_glob_line "$RAW"; then
+		# Use shell pathname expansion. set -- relies on the script not
+		# having `set -f` enabled (we don't), and the splitting respects
+		# the default IFS for whitespace-free path components.
+		# `printf '%s\n'` collapses multiple matches into one-per-line so
+		# we can iterate even when paths contain glob chars themselves.
+		# shellcheck disable=SC2086
+		set -- $PATTERN
+		for MATCH in "$@"; do
+			# Glob with no matches yields the literal pattern back. Skip
+			# anything that still looks like a pattern.
+			case "$MATCH" in
+				*'*'*|*'?'*|*'['*) continue ;;
+			esac
+			# Existence guard: glob match doesn't imply readable file
+			# (e.g. dangling).
+			[ -e "$MATCH" ] || continue
+			if [ "$USE_PARENT" = "1" ]; then
+				PARENT="${MATCH%/*}"
+				[ -z "$PARENT" ] && PARENT="/"
+				add_target_path "$PARENT"
+			else
+				add_target_path "$MATCH"
+			fi
+		done
+	else
+		# Literal path. The `dir:` prefix is unusual on a literal path
+		# (the user is asking us to hide its parent rather than itself),
+		# but we honour it for orthogonality.
+		if [ "$USE_PARENT" = "1" ]; then
+			PARENT="${PATTERN%/*}"
+			[ -z "$PARENT" ] && PARENT="/"
+			add_target_path "$PARENT"
+		else
+			add_target_path "$PATTERN"
+		fi
+	fi
+}
+
+# Re-expand every raw line into TARGET_PATHS from scratch. Called once
+# at startup and again on every wait loop so newly-mounted dynamic
+# paths (Scene 9.3.0 mounts a randomised /dev/<hash>/debug late in
+# boot) get picked up without restarting the boot script.
+rebuild_target_paths() {
+	TARGET_PATHS=""
+	OLD_IFS="$IFS"
+	IFS="
+"
+	for RAW in $TARGET_RAW_LINES; do
+		IFS="$OLD_IFS"
+		expand_target_line "$RAW"
+		IFS="
+"
+	done
+	IFS="$OLD_IFS"
 }
 
 add_deny_uid() {
@@ -393,15 +530,34 @@ any_target_exists() {
 	return 1
 }
 
-all_targets_exist() {
+# all_literal_targets_exist: every literal (non-glob) line in
+# TARGET_RAW_LINES must resolve to an existing path. Glob lines are
+# ignored here because matching nothing is a valid steady state (e.g.
+# Scene not installed). Without this distinction the boot wait would
+# burn its full timeout every boot on devices without Scene 9.3.
+all_literal_targets_exist() {
 	OLD_IFS="$IFS"
-	IFS=","
-	for TARGET_ITEM in $TARGET_PATHS; do
+	IFS="
+"
+	for RAW in $TARGET_RAW_LINES; do
 		IFS="$OLD_IFS"
-		if [ ! -e "$TARGET_ITEM" ]; then
+		# Strip dir: prefix for the existence check; the literal path
+		# itself must exist (the kernel will then hide its parent).
+		PROBE="$RAW"
+		case "$PROBE" in
+			dir:*) PROBE="${PROBE#dir:}" ;;
+		esac
+		if is_glob_line "$RAW"; then
+			IFS="
+"
+			continue
+		fi
+		if [ ! -e "$PROBE" ]; then
+			IFS="$OLD_IFS"
 			return 1
 		fi
-		IFS=","
+		IFS="
+"
 	done
 	IFS="$OLD_IFS"
 	return 0
@@ -409,13 +565,35 @@ all_targets_exist() {
 
 log_missing_targets() {
 	OLD_IFS="$IFS"
-	IFS=","
-	for TARGET_ITEM in $TARGET_PATHS; do
+	IFS="
+"
+	for RAW in $TARGET_RAW_LINES; do
 		IFS="$OLD_IFS"
-		if [ ! -e "$TARGET_ITEM" ]; then
-			log_i "target still missing, kernel will skip: $TARGET_ITEM"
+		PROBE="$RAW"
+		case "$PROBE" in
+			dir:*) PROBE="${PROBE#dir:}" ;;
+		esac
+		if is_glob_line "$RAW"; then
+			# Run the line's own expansion to count matches. A glob with
+			# 0 matches is not an error -- the user's Scene may not be
+			# installed -- but we log it once at info level so users can
+			# tell from logs whether the line is doing anything.
+			SAVE_TARGET_PATHS="$TARGET_PATHS"
+			TARGET_PATHS=""
+			expand_target_line "$RAW"
+			if [ -z "$TARGET_PATHS" ]; then
+				log_i "glob line currently has no matches: $RAW"
+			fi
+			TARGET_PATHS="$SAVE_TARGET_PATHS"
+			IFS="
+"
+			continue
 		fi
-		IFS=","
+		if [ ! -e "$PROBE" ]; then
+			log_i "literal target still missing, kernel will skip: $PROBE"
+		fi
+		IFS="
+"
 	done
 	IFS="$OLD_IFS"
 }
@@ -423,10 +601,15 @@ log_missing_targets() {
 wait_for_targets() {
 	END="$1"
 
-	write_boot_state "waiting-targets" "$TARGET_PATHS" "$END"
+	write_boot_state "waiting-targets" "$TARGET_RAW_LINES" "$END"
 
 	while :; do
-		if all_targets_exist; then
+		# Re-expand every iteration so a Scene boot that mounts the
+		# randomised /dev/<hash>/debug late in boot is picked up as
+		# soon as it appears, without having to wait for the literal
+		# /dev/scene fallback to also resolve.
+		rebuild_target_paths
+		if all_literal_targets_exist; then
 			return 0
 		fi
 		NOW="$(date +%s 2>/dev/null || echo 0)"
@@ -434,7 +617,11 @@ wait_for_targets() {
 		sleep 1
 	done
 
+	# Final expansion before deciding what to load.
+	rebuild_target_paths
 	log_missing_targets
+	# The kernel is happy to load with a partial target set; only bail
+	# if literally nothing exists at all.
 	any_target_exists
 }
 
@@ -492,8 +679,11 @@ if [ -f "$CONFIG_PATH" ]; then
 				continue
 				;;
 		esac
-		add_target_path "$CONFIG_LINE"
+		add_target_raw_line "$CONFIG_LINE"
 	done < "$CONFIG_PATH"
+	# Initial expansion. wait_for_targets() will rebuild on every loop
+	# iteration so glob lines stay current.
+	rebuild_target_paths
 fi
 
 if [ -f "$HIDE_DIRENTS_CONFIG" ]; then
@@ -549,7 +739,7 @@ case "$ENABLE_SYSCALL_HOOKS" in
 		;;
 esac
 
-if [ -z "$TARGET_PATHS" ]; then
+if [ -z "$TARGET_RAW_LINES" ]; then
 	log_e "empty target path list"
 	write_boot_state "skipped-empty-targets" "no path configured" ""
 	exit 1

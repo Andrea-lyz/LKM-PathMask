@@ -197,8 +197,26 @@ main {
 
 .pathRow {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) 44px;
+	grid-template-columns: minmax(0, 1fr) auto 44px;
 	gap: 8px;
+	align-items: center;
+}
+
+.pathRowDirToggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0 6px;
+	font-size: 12px;
+	color: color-mix(in srgb, CanvasText 72%, transparent);
+	cursor: pointer;
+	user-select: none;
+}
+
+.pathRowDirToggle input[type="checkbox"] {
+	width: 16px;
+	height: 16px;
+	margin: 0;
 }
 
 input,
