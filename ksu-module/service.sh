@@ -18,6 +18,7 @@ MOD_SCOPE_MODE_CONFIG="$MODDIR/scope_mode.conf"
 MOD_DENY_UIDS_CONFIG="$MODDIR/deny_uids.conf"
 MOD_DENY_PACKAGES_CONFIG="$MODDIR/deny_packages.conf"
 MOD_WAIT_SECONDS_CONFIG="$MODDIR/wait_seconds.conf"
+MOD_ENABLE_SYSCALL_HOOKS_CONFIG="$MODDIR/enable_syscall_hooks.conf"
 
 CONFIG_PATH="$PERSIST_DIR/target_path.conf"
 HIDE_DIRENTS_CONFIG="$PERSIST_DIR/hide_dirents.conf"
@@ -25,6 +26,7 @@ SCOPE_MODE_CONFIG="$PERSIST_DIR/scope_mode.conf"
 DENY_UIDS_CONFIG="$PERSIST_DIR/deny_uids.conf"
 DENY_PACKAGES_CONFIG="$PERSIST_DIR/deny_packages.conf"
 WAIT_SECONDS_CONFIG="$PERSIST_DIR/wait_seconds.conf"
+ENABLE_SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/enable_syscall_hooks.conf"
 LEGACY_TARGET_WAIT_SECONDS_CONFIG="$PERSIST_DIR/target_wait_seconds.conf"
 LEGACY_PACKAGE_WAIT_SECONDS_CONFIG="$PERSIST_DIR/package_wait_seconds.conf"
 BOOT_STATE_PATH="$PERSIST_DIR/boot_state"
@@ -34,6 +36,7 @@ HIDE_DIRENTS=1
 SCOPE_MODE=deny
 DENY_UIDS=""
 WAIT_SECONDS=60
+ENABLE_SYSCALL_HOOKS=0
 UNRESOLVED_PACKAGES=0
 
 read_load_failure_count() {
@@ -181,6 +184,7 @@ init_persistent_config() {
 		DENY_UIDS_CONFIG="$MOD_DENY_UIDS_CONFIG"
 		DENY_PACKAGES_CONFIG="$MOD_DENY_PACKAGES_CONFIG"
 		WAIT_SECONDS_CONFIG="$MOD_WAIT_SECONDS_CONFIG"
+		ENABLE_SYSCALL_HOOKS_CONFIG="$MOD_ENABLE_SYSCALL_HOOKS_CONFIG"
 		return
 	fi
 
@@ -192,6 +196,7 @@ init_persistent_config() {
 	seed_config_file "$DENY_UIDS_CONFIG" "$MOD_DENY_UIDS_CONFIG" ""
 	seed_config_file "$DENY_PACKAGES_CONFIG" "$MOD_DENY_PACKAGES_CONFIG" ""
 	seed_config_file "$WAIT_SECONDS_CONFIG" "$MOD_WAIT_SECONDS_CONFIG" "60"
+	seed_config_file "$ENABLE_SYSCALL_HOOKS_CONFIG" "$MOD_ENABLE_SYSCALL_HOOKS_CONFIG" "0"
 }
 
 add_target_path() {
@@ -503,6 +508,10 @@ if [ -f "$WAIT_SECONDS_CONFIG" ]; then
 	WAIT_SECONDS="$(head -n 1 "$WAIT_SECONDS_CONFIG" | tr -d '\r ')"
 fi
 
+if [ -f "$ENABLE_SYSCALL_HOOKS_CONFIG" ]; then
+	ENABLE_SYSCALL_HOOKS="$(head -n 1 "$ENABLE_SYSCALL_HOOKS_CONFIG" | tr -d '\r ')"
+fi
+
 if [ -n "${PATHMASK_WAIT_SECONDS:-}" ]; then
 	WAIT_SECONDS="$PATHMASK_WAIT_SECONDS"
 fi
@@ -528,6 +537,15 @@ case "$HIDE_DIRENTS" in
 		;;
 	*)
 		HIDE_DIRENTS=1
+		;;
+esac
+
+case "$ENABLE_SYSCALL_HOOKS" in
+	1|true|True|yes|Yes|on|On)
+		ENABLE_SYSCALL_HOOKS=1
+		;;
+	*)
+		ENABLE_SYSCALL_HOOKS=0
 		;;
 esac
 
@@ -579,9 +597,9 @@ if grep -q '^nohello ' /proc/modules 2>/dev/null; then
 	exit 0
 fi
 
-if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS"; then
+if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS"; then
 	reset_load_failure_guard
-	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS"
+	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS"
 	write_boot_state "loaded" "$TARGET_PATHS" ""
 else
 	log_e "failed to load $KO_PATH"

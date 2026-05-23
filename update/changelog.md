@@ -1,16 +1,41 @@
 # PathMask 2.2.8
 
-- Fix Holmes "Abnormal Environment (04)" misdetection (and similar App Zygote-based probes that survive Zygisk Next denylist). The detector declares its `HolmesService` with `android:isolatedProcess="true" android:useAppZygote="true"` plus a `zygotePreloadName="me.garfieldhan.holmes.HolmesZygotePreload"` callback, then runs its native `preload()` integrity check (`/proc/self/maps` scan, linker / PLT-GOT inspection) inside the App Zygote process *before* the service is forked. The probe result is stashed in a static field, copy-on-write inherits it into the forked service, and Binder transaction `1625` ships the code back to `MainActivity`.
-- The kernel module's "isolated UID" check (`hide_isolated`) only covered the regular isolated range `99000-99999` (`FIRST_ISOLATED_UID` / `LAST_ISOLATED_UID` from `frameworks/base android/os/Process.java`). App Zygote isolated processes use a different range `90000-98999` (`FIRST_APP_ZYGOTE_ISOLATED_UID` / `LAST_APP_ZYGOTE_ISOLATED_UID`, with `NUM_UIDS_PER_APP_ZYGOTE = 100` per app). Without that range in `should_hide_for_current()`, the preload callback ran in deny scope but path masking did **not** kick in, so `/data/adb/...`, Zygisk shared libraries, and the configured target paths stayed visible.
-- `is_android_isolated_uid()` now matches both ranges. Existing config keeps working: enabling `hide_isolated=1` (the default) automatically covers App Zygote services without any extra UID list.
-- `deny_packages.conf` ships with `me.garfieldhan.holmes` added so the *main* (non-isolated) app process is also covered when `MainActivity` later reads back the preload state via Binder.
+## Holmes "Abnormal Environment (04)" — actual fix
+
+Bisection across v2.2.0 → v2.2.7 narrowed the regression to **v2.2.5**, the version that introduced the five `__arm64_sys_*` kretprobes (`newfstatat`, `statx`, `faccessat`, `faccessat2`, `readlinkat`). v2.2.7 then added `__arm64_sys_openat` / `openat2` on the same hot path. Static analysis of `libholmes.so` (~56 MB, OLLVM-class obfuscation, no `pathmask` / `nohello` / `/proc/modules` / `/proc/self/maps` literals — confirming string encryption rather than a name-based dictionary), combined with a clean `/proc/<pid>/maps` for `me.garfieldhan.holmes_zygote` (no `/data/adb`, no zygisk so), and the bisection point pointing exactly at "syscall hot-path probes added", indicate the detector is **timing-based**: a tight `stat()` / `access()` loop measured against a baseline. The arm64 kretprobe entry+exit trampoline costs hundreds of nanoseconds to ~1 µs per call regardless of the entry handler's verdict, which a per-call benchmark loop with N≥100 picks up reliably.
+
+- Add `enable_syscall_hooks` module parameter (bool, default **0**). When 0, the seven `__arm64_sys_*` kretprobes are not registered at all; `inode_permission`, `vfs_getattr`, and `__arm64_sys_getdents64` remain hooked unconditionally.
+- The default behaviour now matches v2.2.4 from a syscall-visibility standpoint, so timing-based environment probes (Holmes' Abnormal Environment 04 and similar) no longer trip. The v2.2.4 → v2.2.7 fixes for ThinLTO-inlined kretprobe targets, the openat fd-leak handling, and the GKI 5.15 / CFI / argument-register-shift work all stay in place — only the registration of the syscall hot-path probes is now opt-in.
+- Users who hit a detector that bypasses `inode_permission` / `vfs_getattr` via ThinLTO inlining and need the stronger coverage can flip `enable_syscall_hooks=1` (KSU module: `enable_syscall_hooks.conf`, WebUI: 增强 syscall 兜底 toggle).
+- `service.sh` reads the new `enable_syscall_hooks.conf`, normalizes it (accepts `0/1/true/false/yes/no/on/off`), and passes the result to `insmod`.
+- WebUI: new toggle "增强 syscall 兜底" with explicit warning text. Save / 保存并热重载 / 恢复默认 all write the new conf.
+- `tools/package_ksu.{ps1,sh}` accept `-EnableSyscallHooks` / `ENABLE_SYSCALL_HOOKS=`.
+
+## App Zygote isolated UID range coverage (kept)
+
+- Fix a separate, real coverage gap unrelated to Holmes: `is_android_isolated_uid()` previously only matched the regular isolated UID range `99000-99999` (`FIRST/LAST_ISOLATED_UID` from `frameworks/base android/os/Process.java`). App Zygote isolated services declared with `android:useAppZygote="true"` use a different range `90000-98999` (`FIRST/LAST_APP_ZYGOTE_ISOLATED_UID`, with `NUM_UIDS_PER_APP_ZYGOTE = 100` per app). Without that range in `should_hide_for_current()`, the preload callback running on the App Zygote process was outside `hide_isolated` scope.
+- `is_android_isolated_uid()` now matches both ranges. Existing config keeps working: `hide_isolated=1` (the default) automatically covers App Zygote services without any extra UID list. This change is a coverage improvement; on its own it does **not** fix Holmes 04 (Holmes runs its `holmes_zygote` under the *application's* normal UID, not 90000-98999, per `ps -A` evidence — the App Zygote child UID range applies to the forked isolated service, not the App Zygote process itself).
+- `deny_packages.conf` ships with `me.garfieldhan.holmes` added so the main app process is in deny scope when `MainActivity` reads back the preload state via Binder. Drops `me.garfieldhan.holmes` if you don't have Holmes installed.
 
 中文说明：
 
-- 修复 Holmes "Abnormal Environment (04)" 误报（以及其它走 App Zygote 路径的检测，包括 Zygisk Next denylist 拦不住的）。Holmes 把检测服务声明为 `android:isolatedProcess="true" android:useAppZygote="true"`，再用 `zygotePreloadName="me.garfieldhan.holmes.HolmesZygotePreload"` 在 App Zygote fork 之前就调用 native `preload()` 做 `/proc/self/maps` 扫描 + linker / PLT-GOT 检测。结果落到静态字段，COW 进 service 进程，最后通过 Binder 1625 号事务返回给 `MainActivity`。
-- 内核模块原本的 "隔离 UID" 判定（`hide_isolated`）只覆盖 `99000-99999`（`FIRST_ISOLATED_UID` / `LAST_ISOLATED_UID`，见 `frameworks/base android/os/Process.java`）。App Zygote 用的是另一段 `90000-98999`（`FIRST_APP_ZYGOTE_ISOLATED_UID` / `LAST_APP_ZYGOTE_ISOLATED_UID`，每个 app 占 `NUM_UIDS_PER_APP_ZYGOTE = 100` 个 UID）。这一段没纳入 `should_hide_for_current()`，导致 deny 模式下 preload 跑的时候我们的路径隐藏完全没生效，`/data/adb/...`、Zygisk so 库以及配置的目标路径全部能被它读到。
-- `is_android_isolated_uid()` 现在两段都匹配。配置不变：开启 `hide_isolated=1`（默认开启）就自动覆盖 App Zygote 服务，不用单独加 UID。
-- `deny_packages.conf` 内置加上 `me.garfieldhan.holmes`，主进程非隔离的那一份在 `MainActivity` 通过 Binder 回读 preload 状态时也能被覆盖。
+## Holmes "Abnormal Environment (04)" 真实修复
+
+对 v2.2.0 → v2.2.7 做版本 bisect，问题被定位到 **v2.2.5**：那一版引入了 5 个 `__arm64_sys_*` kretprobe（`newfstatat`、`statx`、`faccessat`、`faccessat2`、`readlinkat`），v2.2.7 又在同一条热路径上加了 `__arm64_sys_openat` / `openat2`。对 `libholmes.so`（约 56 MB，OLLVM 级混淆，静态字符串里**找不到** `pathmask` / `nohello` / `/proc/modules` / `/proc/self/maps` —— 这是字符串加密的特征，不是名字字典），加上 `me.garfieldhan.holmes_zygote` 的 `/proc/<pid>/maps` 是**干净的**（没有 `/data/adb`、没有 zygisk so），三条证据合起来说明：检测是**纯系统调用时延统计**，类似 `for (i=0; i<N; i++) stat(...)` 这种基准测试。kretprobe 在 arm64 上的 entry+exit trampoline 不论 handler 内部判断结果如何，每次调用都要付出几百纳秒到 1 微秒级的开销，N≥100 的循环就能稳定打出来。
+
+- 新增模块参数 `enable_syscall_hooks`（bool，默认 **0**）。为 0 时这 7 个 `__arm64_sys_*` kretprobe 完全不注册；`inode_permission` / `vfs_getattr` / `__arm64_sys_getdents64` 不变，始终挂载。
+- 默认行为从 syscall 可见性角度回到 v2.2.4，所以基于时延的环境检测（Holmes Abnormal Environment 04 等）不再触发。v2.2.4 → v2.2.7 那波修复（ThinLTO 内联兜底、openat fd 泄漏处理、GKI 5.15 / CFI / 参数寄存器位移）全部保留 —— **只有热路径 syscall hook 的注册改为选项式**。
+- 如果你确实遇到某个 detector 通过 ThinLTO 把 `inode_permission` / `vfs_getattr` 内联绕过了，可以打开 `enable_syscall_hooks=1`（KSU 模块：`enable_syscall_hooks.conf`，WebUI：「增强 syscall 兜底」开关）。
+- `service.sh` 读取新的 `enable_syscall_hooks.conf`，归一化（接受 `0/1/true/false/yes/no/on/off`），结果透传给 `insmod`。
+- WebUI 新增「增强 syscall 兜底」开关，附明确警告。保存 / 保存并热重载 / 恢复默认都会写这个 conf。
+- `tools/package_ksu.{ps1,sh}` 支持 `-EnableSyscallHooks` / `ENABLE_SYSCALL_HOOKS=`。
+
+## App Zygote 隔离 UID 区段覆盖（保留）
+
+- 修复一处与 Holmes 无关、独立存在的真实覆盖盲区：`is_android_isolated_uid()` 原先只匹配标准隔离 UID 区段 `99000-99999`（`FIRST/LAST_ISOLATED_UID`，见 `frameworks/base android/os/Process.java`）。声明了 `android:useAppZygote="true"` 的隔离服务用的是另一段 `90000-98999`（`FIRST/LAST_APP_ZYGOTE_ISOLATED_UID`，每个 app 占 `NUM_UIDS_PER_APP_ZYGOTE = 100` 个 UID）。这一段没纳入 `should_hide_for_current()`，导致这种服务跑在 deny 范围之外。
+- `is_android_isolated_uid()` 现在两段都匹配。配置不变：`hide_isolated=1`（默认开）就会自动覆盖 App Zygote 服务。这是一个覆盖度改进；**单凭这个并不修复 Holmes 04**——`ps -A` 实测 Holmes 的 `holmes_zygote` 跑在主应用 UID（10587）下，不是 90000-98999；那段 UID 是 App Zygote **派生出去的隔离服务**才用的。
+- `deny_packages.conf` 内置加上 `me.garfieldhan.holmes`，主进程非隔离的那一份在 `MainActivity` 通过 Binder 回读 preload 状态时也能被覆盖。如果你没装 Holmes，删掉这一行。
+
 
 # PathMask 2.2.7
 

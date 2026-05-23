@@ -279,6 +279,18 @@ button:active {
 	line-height: 1.5;
 }
 
+.switchRow .hint {
+	display: block;
+	margin-top: 4px;
+	font-weight: normal;
+}
+
+.switchRow > span:first-child {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+}
+
 .search {
 	margin-bottom: 10px;
 }

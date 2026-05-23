@@ -31,6 +31,7 @@ const files = {
 	denyPackages: `${CONFIGDIR}/deny_packages.conf`,
 	denyUids: `${CONFIGDIR}/deny_uids.conf`,
 	waitSeconds: `${CONFIGDIR}/wait_seconds.conf`,
+	enableSyscallHooks: `${CONFIGDIR}/enable_syscall_hooks.conf`,
 	bootState: `${CONFIGDIR}/boot_state`,
 	failCount: `${CONFIGDIR}/load_fail_count`,
 	failReason: `${CONFIGDIR}/load_fail_reason`,
@@ -176,6 +177,17 @@ function countCsv(text) {
 
 function firstLine(text) {
 	return (text || "").split(/\r?\n/)[0]?.trim() || "";
+}
+
+// Mirror service.sh's accept-list for boolean *.conf files. The kernel
+// param itself is bool 0/1, but we accept the same human-friendly values
+// here so a manually-edited conf with "true"/"yes" still loads cleanly.
+function parseBoolish(text, fallback = false) {
+	const v = firstLine(text).toLowerCase();
+	if (v === "") return fallback;
+	if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
+	if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+	return fallback;
 }
 
 function setText(selector, value) {
@@ -458,6 +470,7 @@ async function refreshConfig() {
 	const pkgText = await readFile(files.denyPackages);
 	const uidText = await readFile(files.denyUids);
 	const waitText = await readFile(files.waitSeconds);
+	const enableSyscallHooksText = await readFile(files.enableSyscallHooks);
 	const bootStateText = await readFile(files.bootState);
 	const moduleText = await safeExec(`grep '^${MODULE_NAME} ' /proc/modules || true`);
 	const legacyModuleText = await safeExec(`grep '^${LEGACY_MODULE_NAME} ' /proc/modules || true`);
@@ -472,6 +485,7 @@ async function refreshConfig() {
 
 	renderPaths(linesFromText(targetText));
 	$("#hideDirentsInput").checked = (hideText.trim() || "1") !== "0";
+	$("#enableSyscallHooksInput").checked = parseBoolish(enableSyscallHooksText, false);
 	const scope = (scopeText.trim() || "deny") === "global" ? "global" : "deny";
 	document.querySelector(`input[name="scope"][value="${scope}"]`).checked = true;
 	const packageLines = linesFromText(pkgText);
@@ -488,6 +502,7 @@ async function refreshConfig() {
 		pkgText,
 		uidText,
 		waitText,
+		enableSyscallHooksText,
 		bootStateText,
 		bootState: parseBootState(bootStateText),
 		nowEpoch: Number.parseInt((nowText || "0").trim(), 10) || 0,
@@ -812,6 +827,7 @@ async function saveConfig() {
 	const scope = document.querySelector('input[name="scope"]:checked')?.value || "global";
 	await writeLines(files.targets, collectPaths());
 	await writeLines(files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]);
+	await writeLines(files.enableSyscallHooks, [$("#enableSyscallHooksInput").checked ? "1" : "0"]);
 	await writeLines(files.scope, [scope]);
 	await writeLines(files.denyPackages, [...selectedPackages].sort());
 	await writeLines(files.denyUids, linesFromText($("#denyUidsInput").value));
@@ -826,6 +842,7 @@ async function reloadModule() {
 	const scope = document.querySelector('input[name="scope"]:checked')?.value || "global";
 	await writeLines(files.targets, collectPaths());
 	await writeLines(files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]);
+	await writeLines(files.enableSyscallHooks, [$("#enableSyscallHooksInput").checked ? "1" : "0"]);
 	await writeLines(files.scope, [scope]);
 	await writeLines(files.denyPackages, [...selectedPackages].sort());
 	await writeLines(files.denyUids, linesFromText($("#denyUidsInput").value));
@@ -852,6 +869,7 @@ async function pauseHiding() {
 async function restoreDefaults() {
 	await writeLines(files.targets, DEFAULT_TARGET_PATHS);
 	await writeLines(files.hideDirents, ["1"]);
+	await writeLines(files.enableSyscallHooks, ["0"]);
 	await writeLines(files.scope, ["deny"]);
 	await writeLines(files.denyPackages, DEFAULT_DENY_PACKAGES);
 	await writeLines(files.denyUids, []);

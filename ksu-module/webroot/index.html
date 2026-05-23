@@ -76,6 +76,17 @@
 					<span>隐藏上级目录列表项</span>
 					<input id="hideDirentsInput" type="checkbox">
 				</label>
+				<label class="switchRow">
+					<span>
+						增强 syscall 兜底
+						<small class="hint">
+							挂 7 个 <code>__arm64_sys_*</code> kretprobe 兜底 ThinLTO 内联场景。
+							<strong>默认关闭</strong>：开启后会被基于 stat/access 时延的环境检测识别（如 Holmes Abnormal Environment 04）。
+							仅在某个 detector 通过 ThinLTO 内联绕过 inode_permission/vfs_getattr 时再开。
+						</small>
+					</span>
+					<input id="enableSyscallHooksInput" type="checkbox">
+				</label>
 			</section>
 
 			<section class="panel">

@@ -78,6 +78,42 @@ static bool hide_isolated = true;
 module_param(hide_isolated, bool, 0644);
 MODULE_PARM_DESC(hide_isolated, "Also hide from Android isolated-process UIDs (90000-98999 App Zygote, 99000-99999 plain isolated) in deny scope");
 
+/*
+ * `enable_syscall_hooks` gates the seven `__arm64_sys_*` kretprobes
+ * (newfstatat, statx, faccessat, faccessat2, readlinkat, openat,
+ * openat2). Those probes were introduced in v2.2.5/v2.2.7 to cover
+ * stat()/access()/readlink()/openat() paths that ThinLTO inlines
+ * away from `vfs_getattr` / `inode_permission` on Android GKI 5.15+.
+ *
+ * The trade-off is that these hooks sit on the hottest path in the
+ * kernel: every dlopen/fopen/access/"does this exist" call -- in
+ * any process -- executes them. The kretprobe entry+exit trampoline
+ * on arm64 adds a small but very measurable overhead per call
+ * (hundreds of nanoseconds to ~1 microsecond on Snapdragon-class
+ * SoCs). Detectors that fingerprint the environment by running a
+ * tight stat()/access() loop and timing it against a baseline can
+ * pick that up. Holmes' "Abnormal Environment (04)" was bisected
+ * to exactly the v2.2.5 probe-set introduction (v2.2.4 fine,
+ * v2.2.5+ trips). The detection target is the *presence of these
+ * hooks*, not their effect, so flipping `should_hide_for_current()`
+ * doesn't help -- the trampoline cost is paid before we get a
+ * chance to early-return.
+ *
+ * Default is now `0` (off): only the four core hooks
+ * (inode_permission + vfs_getattr + getdents64 + the one we
+ * keep below for openat-target enforcement) stay active, matching
+ * v2.2.4 syscall-visibility behaviour. Users who hit a detector
+ * that bypasses inode_permission via ThinLTO inlining and need the
+ * stronger coverage can set this to `1`. The
+ * `inode_permission` / `vfs_getattr` / `__arm64_sys_getdents64`
+ * hooks remain unconditionally enabled because they are not on
+ * a detector-friendly hot path.
+ */
+static bool enable_syscall_hooks;
+module_param(enable_syscall_hooks, bool, 0644);
+MODULE_PARM_DESC(enable_syscall_hooks,
+	"Hook __arm64_sys_{newfstatat,statx,faccessat,faccessat2,readlinkat,openat,openat2} for ThinLTO-resistant coverage. Default 0 because the kretprobe trampoline cost is detectable by timing-based environment probes (e.g. Holmes Abnormal Environment 04). Enable only if a detector you care about bypasses inode_permission/vfs_getattr.");
+
 static char scope_mode[16] = "global";
 module_param_string(scope_mode, scope_mode, sizeof(scope_mode), 0644);
 MODULE_PARM_DESC(scope_mode, "Hide scope: global or deny");
@@ -883,7 +919,12 @@ static int __init pathmask_init(void)
 	}
 	pr_info(PM_LOG_PREFIX "hooked vfs_getattr\n");
 
-	register_syscall_hooks();
+	if (enable_syscall_hooks) {
+		register_syscall_hooks();
+	} else {
+		pr_info(PM_LOG_PREFIX
+			"enable_syscall_hooks=0 -- skipping __arm64_sys_* probes (Holmes Abnormal Environment 04 mitigation)\n");
+	}
 
 	if (hide_dirents) {
 		kp_getdents.kp.symbol_name = "__arm64_sys_getdents64";
@@ -906,8 +947,9 @@ static int __init pathmask_init(void)
 	}
 
 	pr_info(PM_LOG_PREFIX
-		"loaded -- %u target(s) hidden, scope=%s, deny_uid_count=%u hide_isolated=%d\n",
-		target_count, scope_mode, deny_uid_count, hide_isolated);
+		"loaded -- %u target(s) hidden, scope=%s, deny_uid_count=%u hide_isolated=%d enable_syscall_hooks=%d\n",
+		target_count, scope_mode, deny_uid_count, hide_isolated,
+		enable_syscall_hooks);
 	return 0;
 }
 

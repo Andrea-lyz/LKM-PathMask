@@ -4,6 +4,8 @@ param(
     [string]$TargetPath = "/dev/cpuset/scene-daemon,/dev/scene,/system_ext/app/SoterService",
     [ValidateSet("0", "1")]
     [string]$HideDirents = "1",
+    [ValidateSet("0", "1")]
+    [string]$EnableSyscallHooks = "0",
     [ValidateSet("global", "deny")]
     [string]$ScopeMode = "deny",
     [string]$DenyPackage = "com.chunqiunativecheck,com.eltavine.duckdetector,luna.safe.luna",
@@ -62,6 +64,7 @@ if ($UpdateJson.Trim()) {
 
 Set-Content -LiteralPath (Join-Path $StageDir "target_path.conf") -Value $TargetList -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $StageDir "hide_dirents.conf") -Value $HideDirents -NoNewline -Encoding ASCII
+Set-Content -LiteralPath (Join-Path $StageDir "enable_syscall_hooks.conf") -Value $EnableSyscallHooks -NoNewline -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $StageDir "scope_mode.conf") -Value $ScopeMode -NoNewline -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $StageDir "deny_packages.conf") -Value $DenyPackageList -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $StageDir "deny_uids.conf") -Value $DenyUidList -Encoding ASCII
@@ -104,6 +107,7 @@ finally {
 Write-Host "Created KernelSU package: $Output"
 Write-Host "Target paths: $($TargetList -join ', ')"
 Write-Host "Hide dirents: $HideDirents"
+Write-Host "Enable syscall hooks: $EnableSyscallHooks"
 Write-Host "Scope mode: $ScopeMode"
 Write-Host "Deny packages: $($DenyPackageList -join ', ')"
 Write-Host "Deny UIDs: $($DenyUidList -join ', ')"
