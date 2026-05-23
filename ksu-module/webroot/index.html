@@ -53,7 +53,20 @@
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2>隐藏路径</h2>
-					<button id="addPathBtn" type="button">添加</button>
+					<div class="inlineControls">
+						<button id="pathHelpBtn" class="iconButton" type="button" aria-label="路径配置说明" title="路径配置说明">
+							<svg viewBox="0 0 24 24" aria-hidden="true">
+								<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm-1-3h2v-6h-2v6zm0-8h2V7h-2v2z"/>
+							</svg>
+						</button>
+						<button id="addPathBtn" type="button">添加</button>
+					</div>
+				</div>
+				<div class="pathRowHeader" aria-hidden="true">
+					<span>路径</span>
+					<span>组</span>
+					<span>父级</span>
+					<span></span>
 				</div>
 				<div id="pathList" class="stack"></div>
 			</section>
@@ -75,6 +88,15 @@
 				<label class="switchRow">
 					<span>隐藏上级目录列表项</span>
 					<input id="hideDirentsInput" type="checkbox">
+				</label>
+				<label class="switchRow">
+					<span>
+						增强 syscall 兜底
+						<small class="hint">
+							加强少数极端场景下的路径隐藏效果，但会被多数环境检测识别为异常（如 Holmes、Hunter 等）。<strong>不推荐开启。</strong>
+						</small>
+					</span>
+					<input id="enableSyscallHooksInput" type="checkbox">
 				</label>
 			</section>
 
@@ -172,6 +194,54 @@
 	</footer>
 
 	<div id="toast" class="toast" hidden></div>
-	<script src="./app.js"></script>
+
+	<div id="pathHelpModal" class="modal" hidden>
+		<div class="modalBackdrop" data-modal-close="pathHelpModal"></div>
+		<div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="pathHelpTitle">
+			<div class="modalHeader">
+				<h2 id="pathHelpTitle">路径配置说明</h2>
+				<button class="iconButton" type="button" data-modal-close="pathHelpModal" aria-label="关闭">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M5.7 4.29 4.29 5.71 10.59 12l-6.3 6.29 1.42 1.42L12 13.41l6.29 6.3 1.42-1.42L13.41 12l6.3-6.29-1.42-1.42L12 10.59z"/>
+					</svg>
+				</button>
+			</div>
+			<div class="modalBody">
+				<h3>路径</h3>
+				<p>每行一个目标，绝对路径。匹配的文件 / 目录会从黑名单 UID 视角变为不存在。</p>
+
+				<h3><code>???</code> 通配符</h3>
+				<p>任意一段路径名（不跨 <code>/</code>），等价于 shell <code>*</code> 但写起来不会被误读。例如 <code>/dev/???/scene_mode_category</code> 会命中 <code>/dev/asldpx_c/scene_mode_category</code>、<code>/dev/xcscvgtp/scene_mode_category</code> 等任意 8 字符随机父目录。</p>
+
+				<h3>组</h3>
+				<p>可选 OR 分组名。同名组内只要任一行命中即视为该组满足，所有未分组的行仍需各自存在。常用于「Scene 8.x 旧路径 OR Scene 9.3+ 随机路径」这种「两套同效」的兼容配置。</p>
+				<p>默认配置示例：<code>/dev/scene</code> 与 <code>/dev/???/scene_mode_category</code> 同属 <code>scene</code> 组，无论装的是哪一版 Scene 都能开机即时放行加载，没装 Scene 也不会因等待这两条而拖慢启动。</p>
+
+				<h3>父级</h3>
+				<p>勾选后，命中的不是这条路径本身而是它的<strong>父目录</strong>。配合 <code>???</code> 通配能把整段随机父目录连同其所有子项一并隐藏，封死「文件存在性边信道」类检测（<code>access</code>/<code>mkdir</code>/<code>stat</code> 三连击全部返回 <code>ENOENT</code>）。</p>
+
+				<h3>语法组合</h3>
+				<p>三种前缀可叠加，固定顺序为 <code>any:&lt;组&gt;:dir:&lt;path&gt;</code>。WebUI 自动按勾选项拼装写入，手工编辑 conf 也按这个顺序。</p>
+			</div>
+		</div>
+	</div>
+
+	<script charset="utf-8">
+		// Last-resort syntax error trap: any parse failure in app.js
+		// (or runtime error before app.js wires its own handlers) lands
+		// here. Writes the error to #statusText so the WebUI never
+		// silently freezes on the HTML default again.
+		window.addEventListener("error", function(e) {
+			var s = document.getElementById("statusText");
+			if (!s) return;
+			var msg = (e && e.message) ? e.message : "脚本错误";
+			var loc = (e && e.filename)
+				? " @ " + e.filename.replace(/^.*\//, "") + ":" + e.lineno
+				: "";
+			s.textContent = "脚本错误：" + msg + loc;
+			s.style.color = "#c01c28";
+		}, true);
+	</script>
+	<script src="./app.js" charset="utf-8"></script>
 </body>
 </html>

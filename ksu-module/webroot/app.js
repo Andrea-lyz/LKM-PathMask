@@ -1,3 +1,32 @@
+// Set up a global error trap before anything else. If app.js fails to
+// parse or any top-level statement throws synchronously, the WebUI
+// would otherwise stay frozen on the HTML default status text with
+// no clue what went wrong (the bottom-of-file try/catch can't catch
+// errors thrown above it). This handler writes the error directly
+// into #statusText so we can debug from the WebUI alone, without
+// needing chrome://inspect to be reachable.
+window.addEventListener("error", (event) => {
+	const msg = event && event.message ? event.message : "未知错误";
+	const where = event && event.filename
+		? `${event.filename}:${event.lineno}:${event.colno}`
+		: "";
+	const status = document.getElementById("statusText");
+	if (status) {
+		status.textContent = `脚本错误：${msg} ${where}`;
+		status.style.color = "#c01c28";
+	}
+});
+window.addEventListener("unhandledrejection", (event) => {
+	const reason = event && event.reason;
+	const msg = reason && reason.message ? reason.message
+		: typeof reason === "string" ? reason : String(reason);
+	const status = document.getElementById("statusText");
+	if (status) {
+		status.textContent = `Promise 错误：${msg}`;
+		status.style.color = "#c01c28";
+	}
+});
+
 const MODULE_ID = "pathmask";
 const LEGACY_MODULE_ID = "nohello-demo";
 const MODULE_NAME = "pathmask";
@@ -10,7 +39,8 @@ const LOG_PAGE_LINES = 80;
 
 const DEFAULT_TARGET_PATHS = [
 	"/dev/cpuset/scene-daemon",
-	"/dev/scene",
+	"any:scene:/dev/scene",
+	"any:scene:dir:/dev/???/scene_mode_category",
 	"/system_ext/app/SoterService",
 ];
 
@@ -31,6 +61,7 @@ const files = {
 	denyPackages: `${CONFIGDIR}/deny_packages.conf`,
 	denyUids: `${CONFIGDIR}/deny_uids.conf`,
 	waitSeconds: `${CONFIGDIR}/wait_seconds.conf`,
+	enableSyscallHooks: `${CONFIGDIR}/enable_syscall_hooks.conf`,
 	bootState: `${CONFIGDIR}/boot_state`,
 	failCount: `${CONFIGDIR}/load_fail_count`,
 	failReason: `${CONFIGDIR}/load_fail_reason`,
@@ -178,6 +209,17 @@ function firstLine(text) {
 	return (text || "").split(/\r?\n/)[0]?.trim() || "";
 }
 
+// Mirror service.sh's accept-list for boolean *.conf files. The kernel
+// param itself is bool 0/1, but we accept the same human-friendly values
+// here so a manually-edited conf with "true"/"yes" still loads cleanly.
+function parseBoolish(text, fallback = false) {
+	const v = firstLine(text).toLowerCase();
+	if (v === "") return fallback;
+	if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
+	if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+	return fallback;
+}
+
 function setText(selector, value) {
 	const node = $(selector);
 	if (node) node.textContent = value;
@@ -189,28 +231,93 @@ function renderPaths(paths) {
 	for (const path of list) addPathRow(path);
 }
 
+// A target_path.conf line is one of:
+//   - literal:                `/system_ext/app/SoterService`
+//   - glob (any segment):     `/dev/???/scene_mode_category`
+//   - `dir:` prefix:          hide parent of each match
+//   - `any:<group>:` prefix:  member of an OR group; the boot wait
+//                             is satisfied if *any* member of the
+//                             group resolves. Useful for "Scene 8.x
+//                             OR Scene 9.3+" style configs where
+//                             one of two paths will exist.
+//
+// Prefix order is fixed: `any:<group>:dir:<path>`. dir: stays
+// adjacent to the path so it's obvious which prefix governs which
+// behaviour (group membership vs parent-hiding).
+function splitTargetLine(raw) {
+	let trimmed = (raw || "").trim();
+	let group = "";
+	const m = trimmed.match(/^any:([^:]*):(.*)$/);
+	if (m) {
+		group = m[1];
+		trimmed = m[2].trim();
+	}
+	let useParent = false;
+	if (trimmed.startsWith("dir:")) {
+		useParent = true;
+		trimmed = trimmed.slice(4).trim();
+	}
+	return { group, useParent, path: trimmed };
+}
+
+function joinTargetLine(path, useParent, group) {
+	const p = (path || "").trim();
+	if (!p) return "";
+	let out = useParent ? `dir:${p}` : p;
+	const g = (group || "").trim();
+	if (g) out = `any:${g}:${out}`;
+	return out;
+}
+
 function addPathRow(value = "") {
+	const { useParent, path, group } = splitTargetLine(value);
+
 	const row = document.createElement("div");
 	row.className = "pathRow";
 
 	const input = document.createElement("input");
 	input.type = "text";
-	input.value = value;
-	input.placeholder = "/system/app/example";
+	input.value = path;
+	input.placeholder = "/system/app/example 或 /dev/???/marker";
+
+	const groupInput = document.createElement("input");
+	groupInput.type = "text";
+	groupInput.className = "pathRowGroup";
+	groupInput.value = group;
+	groupInput.placeholder = "组";
+	groupInput.title = "可选 OR 组名。同名组内任一行命中即视为该组满足，所有未分组的行仍需各自存在";
+
+	const dirToggle = document.createElement("label");
+	dirToggle.className = "pathRowDirToggle";
+	dirToggle.title = "勾选后隐藏匹配项的父目录（dir:）。对随机父目录场景必须勾选";
+	const dirCheckbox = document.createElement("input");
+	dirCheckbox.type = "checkbox";
+	dirCheckbox.checked = useParent;
+	dirToggle.append(dirCheckbox);
 
 	const remove = document.createElement("button");
 	remove.type = "button";
 	remove.textContent = "删";
 	remove.addEventListener("click", () => row.remove());
 
-	row.append(input, remove);
+	row.append(input, groupInput, dirToggle, remove);
 	pathList.append(row);
 	input.focus();
 }
 
 function collectPaths() {
-	return [...pathList.querySelectorAll("input")]
-		.map((input) => input.value.trim())
+	return [...pathList.querySelectorAll(".pathRow")]
+		.map((row) => {
+			const inputs = row.querySelectorAll('input[type="text"]');
+			const pathInput = inputs[0];
+			const groupInput = inputs[1];
+			const dirCheckbox = row.querySelector('input[type="checkbox"]');
+			return joinTargetLine(
+				pathInput?.value,
+				dirCheckbox?.checked,
+				groupInput?.value
+			);
+		})
 		.filter(Boolean);
 }
 
@@ -458,6 +565,7 @@ async function refreshConfig() {
 	const pkgText = await readFile(files.denyPackages);
 	const uidText = await readFile(files.denyUids);
 	const waitText = await readFile(files.waitSeconds);
+	const enableSyscallHooksText = await readFile(files.enableSyscallHooks);
 	const bootStateText = await readFile(files.bootState);
 	const moduleText = await safeExec(`grep '^${MODULE_NAME} ' /proc/modules || true`);
 	const legacyModuleText = await safeExec(`grep '^${LEGACY_MODULE_NAME} ' /proc/modules || true`);
@@ -472,6 +580,7 @@ async function refreshConfig() {
 
 	renderPaths(linesFromText(targetText));
 	$("#hideDirentsInput").checked = (hideText.trim() || "1") !== "0";
+	$("#enableSyscallHooksInput").checked = parseBoolish(enableSyscallHooksText, false);
 	const scope = (scopeText.trim() || "deny") === "global" ? "global" : "deny";
 	document.querySelector(`input[name="scope"][value="${scope}"]`).checked = true;
 	const packageLines = linesFromText(pkgText);
@@ -488,6 +597,7 @@ async function refreshConfig() {
 		pkgText,
 		uidText,
 		waitText,
+		enableSyscallHooksText,
 		bootStateText,
 		bootState: parseBootState(bootStateText),
 		nowEpoch: Number.parseInt((nowText || "0").trim(), 10) || 0,
@@ -689,10 +799,42 @@ async function refreshTargetProbe() {
 	lastSnapshot.targetProbeHidden = false;
 	lastSnapshot.targetResolvedCount = -1;
 
-	const body = paths.map((path) => (
-		`if [ -e ${shellQuote(path)} ]; then echo OK ${shellQuote(path)}; else echo MISS ${shellQuote(path)}; fi`
-	)).join("; ");
-	lastSnapshot.targetProbe = await safeExec(body);
+	/*
+	 * Build a probe per raw line. Three cases:
+	 *   - literal `/foo/bar`       -> `[ -e /foo/bar ]`
+	 *   - glob   `/dev/???/marker` -> emit a DYNAMIC marker; we don't
+	 *                                expand from the WebUI because
+	 *                                shell pathname expansion against
+	 *                                /dev/<random> from an unrelated
+	 *                                UID can interact poorly with
+	 *                                selinux directory readability
+	 *                                and produce confusing MISS
+	 *                                verdicts. The kernel's
+	 *                                resolved_count sysfs param is
+	 *                                the source of truth.
+	 *   - `dir:` prefix            -> strip prefix, then test the path
+	 *                                that produces the parent the
+	 *                                kernel will actually hide.
+	 */
+	const probes = paths.map((rawLine) => {
+		const { path } = splitTargetLine(rawLine);
+		const tag = shellQuote(rawLine);
+		// Detect glob metas. We do *not* attempt to expand globs in
+		// the WebUI: shell pathname expansion against /dev/<random>
+		// from an unrelated UID can interact poorly with selinux
+		// directory readability and produce confusing MISS verdicts.
+		// The kernel knows what was resolved (resolved_count sysfs
+		// param), so the UI surfaces glob lines verbatim with a
+		// DYNAMIC marker and trusts the kernel side instead.
+		if (path.indexOf("???") !== -1
+		    || path.indexOf("*") !== -1
+		    || path.indexOf("?") !== -1
+		    || path.indexOf("[") !== -1) {
+			return `echo DYNAMIC ${tag}`;
+		}
+		return `if [ -e ${shellQuote(path)} ]; then echo OK ${tag}; else echo MISS ${tag}; fi`;
+	}).join("; ");
+	lastSnapshot.targetProbe = await safeExec(probes);
 }
 
 async function validateConfig(options = {}) {
@@ -710,17 +852,21 @@ async function validateConfig(options = {}) {
 		errors.push("隐藏路径为空。");
 	}
 
-	for (const path of paths) {
+	for (const rawLine of paths) {
+		const { path, group } = splitTargetLine(rawLine);
 		if (!path.startsWith("/")) {
-			errors.push(`隐藏路径必须是绝对路径：${path}`);
+			errors.push(`隐藏路径必须是绝对路径：${rawLine}`);
 		}
-		if (path.includes(",")) {
-			errors.push(`隐藏路径不能包含英文逗号：${path}`);
+		if (rawLine.includes(",")) {
+			errors.push(`隐藏路径不能包含英文逗号：${rawLine}`);
 		}
-		if (seenPaths.has(path)) {
-			warnings.push(`重复路径会被重复传入内核：${path}`);
+		if (group && /[:\s]/.test(group)) {
+			errors.push(`组名不能包含冒号或空白：${rawLine}`);
 		}
-		seenPaths.add(path);
+		if (seenPaths.has(rawLine)) {
+			warnings.push(`重复路径会被重复传入内核：${rawLine}`);
+		}
+		seenPaths.add(rawLine);
 	}
 
 	for (const uid of directUids) {
@@ -812,6 +958,7 @@ async function saveConfig() {
 	const scope = document.querySelector('input[name="scope"]:checked')?.value || "global";
 	await writeLines(files.targets, collectPaths());
 	await writeLines(files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]);
+	await writeLines(files.enableSyscallHooks, [$("#enableSyscallHooksInput").checked ? "1" : "0"]);
 	await writeLines(files.scope, [scope]);
 	await writeLines(files.denyPackages, [...selectedPackages].sort());
 	await writeLines(files.denyUids, linesFromText($("#denyUidsInput").value));
@@ -826,6 +973,7 @@ async function reloadModule() {
 	const scope = document.querySelector('input[name="scope"]:checked')?.value || "global";
 	await writeLines(files.targets, collectPaths());
 	await writeLines(files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]);
+	await writeLines(files.enableSyscallHooks, [$("#enableSyscallHooksInput").checked ? "1" : "0"]);
 	await writeLines(files.scope, [scope]);
 	await writeLines(files.denyPackages, [...selectedPackages].sort());
 	await writeLines(files.denyUids, linesFromText($("#denyUidsInput").value));
@@ -852,6 +1000,7 @@ async function pauseHiding() {
 async function restoreDefaults() {
 	await writeLines(files.targets, DEFAULT_TARGET_PATHS);
 	await writeLines(files.hideDirents, ["1"]);
+	await writeLines(files.enableSyscallHooks, ["0"]);
 	await writeLines(files.scope, ["deny"]);
 	await writeLines(files.denyPackages, DEFAULT_DENY_PACKAGES);
 	await writeLines(files.denyUids, []);
@@ -902,7 +1051,47 @@ if [ -f ${shellQuote(files.targets)} ]; then
     resolved=$(cat /sys/module/${MODULE_NAME}/parameters/resolved_count 2>/dev/null || echo ?)
     echo "(scope=global, kernel resolved $resolved target(s); skipping user-space stat probe to avoid self-hide)"
   else
-    while IFS= read -r p || [ -n "$p" ]; do [ -z "$p" ] && continue; case "$p" in \\#*) continue;; esac; if [ -e "$p" ]; then echo "OK $p"; else echo "MISS $p"; fi; done < ${shellQuote(files.targets)}
+    # Probe each line: strip optional dir: prefix, translate ??? to
+    # shell *, then either glob-expand (and report HIT/EMPTY) or
+    # plain test -e for literals. Without this, lines like
+    # /dev/???/scene_mode_category are stat()ed verbatim and always
+    # come back as MISS, falsely alarming the user even when the
+    # kernel has the resolved hash dir hidden correctly.
+    while IFS= read -r p || [ -n "$p" ]; do
+      [ -z "$p" ] && continue
+      case "$p" in \\#*) continue;; esac
+      raw="$p"
+      # Strip optional any:<group>: prefix (purely for the wait
+      # logic; the path under it is checked the same way).
+      case "$p" in
+        any:*:*)
+          rest=\${p#any:}
+          p=\${rest#*:}
+          ;;
+      esac
+      case "$p" in dir:*) p=\${p#dir:};; esac
+      pat=$(printf '%s' "$p" | sed 's/[?][?][?]/*/g')
+      case "$pat" in
+        *'*'*|*'?'*|*'['*)
+          # Glob form. Use a child shell to enable expansion;
+          # nullglob isn't available in toybox sh so we test the
+          # first match directly.
+          first=$(/system/bin/sh -c "for m in $pat; do [ -e \\"\\$m\\" ] && echo \\"\\$m\\" && break; done" 2>/dev/null)
+          if [ -n "$first" ]; then
+            echo "HIT $raw -> $first"
+          else
+            echo "EMPTY $raw (glob currently has no matches)"
+          fi
+          ;;
+        *)
+          if [ -e "$pat" ]; then
+            echo "OK $raw"
+          else
+            echo "MISS $raw"
+          fi
+          ;;
+      esac
+    done < ${shellQuote(files.targets)}
   fi
 fi
 true
@@ -948,7 +1137,41 @@ function switchLog(log) {
 	renderLogPage();
 }
 
+function openModal(id) {
+	const modal = document.getElementById(id);
+	if (!modal) return;
+	modal.hidden = false;
+	// Defer the focus call so the dialog has actually rendered
+	// before we move focus into it; avoids a flash where the
+	// previously focused element keeps its outline.
+	setTimeout(() => {
+		const closeBtn = modal.querySelector("[data-modal-close]");
+		if (closeBtn) closeBtn.focus();
+	}, 0);
+}
+
+function closeModal(id) {
+	const modal = document.getElementById(id);
+	if (!modal) return;
+	modal.hidden = true;
+}
+
+document.addEventListener("click", (event) => {
+	const trigger = event.target.closest("[data-modal-close]");
+	if (!trigger) return;
+	const id = trigger.getAttribute("data-modal-close");
+	if (id) closeModal(id);
+});
+
+document.addEventListener("keydown", (event) => {
+	if (event.key !== "Escape") return;
+	for (const modal of $$(".modal")) {
+		if (!modal.hidden) closeModal(modal.id);
+	}
+});
+
 $("#addPathBtn").addEventListener("click", () => addPathRow());
+$("#pathHelpBtn").addEventListener("click", () => openModal("pathHelpModal"));
 $("#loadAppsBtn").addEventListener("click", () => runAction("正在加载应用...", loadApps).catch(() => {}));
 $("#refreshBtn").addEventListener("click", () => runAction("正在刷新...", refreshConfig).catch(() => {}));
 $("#searchInput").addEventListener("input", renderApps);
@@ -990,7 +1213,19 @@ for (const radio of document.querySelectorAll('input[name="scope"]')) {
 $("#denyUidsInput").addEventListener("input", updateHealthList);
 $("#waitSecondsInput").addEventListener("input", updateHealthList);
 
-runAction("正在读取配置...", refreshConfig).catch((error) => {
-	statusText.textContent = "读取失败";
-	showToast(error.message);
-});
+try {
+	runAction("正在读取配置...", refreshConfig).catch((error) => {
+		statusText.textContent = "读取失败";
+		showToast(error.message);
+	});
+} catch (error) {
+	// Synchronous failure during top-level setup. Surface it loudly
+	// so the WebUI doesn't get stuck on the HTML default status text
+	// with no clue what went wrong.
+	statusText.textContent = "脚本初始化失败";
+	if (typeof toast !== "undefined" && toast) {
+		toast.textContent = error && error.message ? error.message : String(error);
+		toast.hidden = false;
+	}
+	throw error;
+}

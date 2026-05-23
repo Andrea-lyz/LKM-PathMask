@@ -1,7 +1,9 @@
 name: Build PathMask for All KMI Targets
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - 'dev/**'
     tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
@@ -9,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   build-lkm:
@@ -30,7 +33,12 @@ jobs:
   publish-release:
     name: Publish module zips to GitHub Release
     needs: build-lkm
-    if: github.event_name != 'pull_request'
+    # Only main / v* tags publish a Release. Dev branches (dev/**) and
+    # pull requests still get build artifacts via actions/upload-artifact
+    # but never push a Release that would notify end users.
+    if: |
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source code

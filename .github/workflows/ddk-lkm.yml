@@ -13,6 +13,10 @@ on:
         default: '20260313'
         type: string
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   build-pathmask:
     name: Build pathmask for ${{ inputs.kmi }}
