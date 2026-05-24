@@ -716,3 +716,70 @@ button:active {
 	font-size: 11px;
 	margin-left: 4px;
 }
+
+
+.verdictBox {
+	margin: 8px 0 4px;
+	padding: 12px 14px;
+	border-radius: 10px;
+	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+	background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.verdictBox[data-level="ok"] {
+	background: color-mix(in srgb, #4caf50 14%, Canvas);
+	border-color: color-mix(in srgb, #4caf50 35%, transparent);
+}
+
+.verdictBox[data-level="warn"] {
+	background: color-mix(in srgb, #ff9800 18%, Canvas);
+	border-color: color-mix(in srgb, #ff9800 40%, transparent);
+}
+
+.verdictBox[data-level="bad"] {
+	background: color-mix(in srgb, #c01c28 16%, Canvas);
+	border-color: color-mix(in srgb, #c01c28 40%, transparent);
+}
+
+.verdictBox[data-level="info"] {
+	background: color-mix(in srgb, #2196f3 14%, Canvas);
+	border-color: color-mix(in srgb, #2196f3 35%, transparent);
+}
+
+.verdictBox .verdictHead {
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.verdictBox .verdictSuggestions {
+	margin: 0;
+	padding-left: 22px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+
+.historyItem {
+	cursor: pointer;
+	padding: 6px 10px;
+	border-radius: 6px;
+	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.historyItem:hover,
+.historyItem:focus {
+	background: color-mix(in srgb, CanvasText 6%, transparent);
+	outline: none;
+}
+
+.historyItem.active {
+	background: color-mix(in srgb, #2196f3 18%, Canvas);
+	border-color: color-mix(in srgb, #2196f3 50%, transparent);
+}

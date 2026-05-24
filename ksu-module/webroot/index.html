@@ -156,9 +156,12 @@
 		<section id="diagnosisPanel" class="tabPanel">
 			<section class="panel">
 				<div class="sectionTitle">
-					<h2>健康检查</h2>
+					<h2>结论</h2>
 					<button id="runDiagnosticBtn" type="button">生成诊断</button>
 				</div>
+				<!-- The verdict box is hidden until a diagnostic run has -->
+				<!-- populated lastSnapshot.verdict; see renderVerdictPanel(). -->
+				<div id="verdictBox" class="verdictBox" hidden></div>
 				<ul id="healthList" class="healthList"></ul>
 			</section>
 
@@ -169,6 +172,7 @@
 				<div class="buttonGrid">
 					<button id="validateConfigBtn" type="button">校验配置</button>
 					<button id="copyReportBtn" type="button">复制诊断报告</button>
+					<button id="historyBtn" type="button">历史诊断</button>
 					<button id="resetDefaultsBtn" type="button">恢复默认配置</button>
 				</div>
 			</section>
@@ -213,6 +217,28 @@
 	</footer>
 
 	<div id="toast" class="toast" hidden></div>
+
+	<div id="historyModal" class="modal" hidden>
+		<div class="modalBackdrop" data-modal-close="historyModal"></div>
+		<div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+			<div class="modalHeader">
+				<h2 id="historyTitle">历史诊断</h2>
+				<button class="iconButton" type="button" data-modal-close="historyModal" aria-label="关闭">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M5.7 4.29 4.29 5.71 10.59 12l-6.3 6.29 1.42 1.42L12 13.41l6.29 6.3 1.42-1.42L13.41 12l6.3-6.29-1.42-1.42L12 10.59z"/>
+					</svg>
+				</button>
+			</div>
+			<div class="modalBody">
+				<p class="hint">每次「生成诊断」后会自动保存最近 5 份。点击下方某一份可在右侧显示内容。今天突然不工作？对比之前的快照能快速定位是哪一项变了。</p>
+				<ul id="historyList" class="healthList"></ul>
+				<textarea id="historyView" class="monoBox" rows="14" readonly placeholder="选择一项查看内容"></textarea>
+				<div class="buttonGrid">
+					<button id="historyCopyBtn" type="button">复制选中</button>
+				</div>
+			</div>
+		</div>
+	</div>
 
 	<div id="pathHelpModal" class="modal" hidden>
 		<div class="modalBackdrop" data-modal-close="pathHelpModal"></div>

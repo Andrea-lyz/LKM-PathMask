@@ -1,3 +1,21 @@
+# PathMask 2.3.3
+
+## 解决了什么
+
+- **重构诊断报告**。把以前那种"四段 raw stdout 拼起来、用户复制完一脸懵、开发者收到只能再问一轮"的诊断换成结构化版本：
+
+  - 顶部 **「结论」**一行话直说当前状态 + 1-3 条具体下一步建议；WebUI 诊断页打开自动出现绿/黄/红/蓝彩色提示框（不用再手动点「生成诊断」），开机阶段从 waiting 走到终态时也会自动重跑一次。
+  - **「关键事实」**段每行带 ✓ ⚠ ✗ · 状态符号：模块加载、ko 文件 sha1、KSU 启用、开机阶段（含「多久前」）、失败计数、路径解析数 vs 配置数、hook 实战命中状态、跳过的 syscall 列表、**包名→UID 反查**（用 service.sh 同样的三段策略 packages.list / pm / stat data dir 逐个解析 deny_packages.conf 里的包名）、stale 配置告警（conf 改了没热重载）、sysfs 孤立 UID、其他 LKM 数量。
+  - **「内核环境」**段：内核版本、KMI、OEM 后缀（自动识别 abogki / oneplus / oxygen / coloros / miui 等；模块工作正常时降级为 info，仅在加载失败 + dmesg 见 CRC 错误时升 ⚠）、page size、SELinux、解码后的内核污染位（不再是裸数字 4608，而是 `4608 = W (warning) + O (out-of-tree, e.g. PathMask itself)`）、dmesg 是否可读、内核拒绝信号专门一行（disagrees about version of symbol / Unknown symbol 等关键词命中即标红）。
+  - **dmesg 段**从 80 行 raw 改成结构化分组：load summary / target inodes / hooked / skipped / hook fired / not found / errors，最后保留 raw 兜底。
+  - **「历史诊断」**按钮：每次诊断保存到 `/data/adb/pathmask/diag-history/diag-<unix>.txt`，自动保留最近 5 份；模态框可对照之前的快照（"今天突然不工作了"对照"上次还好的"）。
+
+- **修复 `(未生成)` 误报**。OnePlus / OxygenOS 16 默认 `dmesg_restrict=1`，旧版报告统一显示"未生成"，让用户以为是 PathMask bug。新版本会写明 `dmesg 不可读：dmesg_restrict=1（系统锁定，root WebUI shell 也无权读，部分 OnePlus / OEM ROM 默认如此）` 并明确"不是 PathMask 的问题"。
+- **修复 `boot_state` 被诊断漏掉**。这个文件不在 `*.conf` glob 里，但它是 service.sh 走到哪一步的唯一信号；之前完全不打印，所以"模块没加载"类问题永远要回头让用户手动 cat。
+- **修复合并 shell + 自定义分隔符在某些 OnePlus / OxygenOS WebUI bridge 上返回空 stdout** 导致 verdict 误判"模块没加载"但旁边 raw dump 明明有 `pathmask 61440 0 - Live` 的诡异问题。改为 10 个独立 `probeExec` 调用，单个失败不污染其它事实。
+
+不影响内核模块、service.sh、conf 字段格式、sysfs 参数：诊断只是观测层。
+
 # PathMask 2.3.2
 
 ## 解决了什么
