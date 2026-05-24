@@ -863,6 +863,56 @@ async function gatherDiagnosticFacts(snapshot) {
 	const trim = (s) => (s || "").trim();
 	const ok = (r) => trim(r && r.ok ? r.stdout : "");
 
+	// Resolve every package in deny_packages.conf to its current UID
+	// using the same three strategies service.sh uses on boot
+	// (packages.list -> pm list packages -U -> stat data dir). One
+	// combined shell so this is a single round-trip; per-package
+	// failure becomes an empty UID column. We emit one line per
+	// package, format `<pkg>\t<uid>` (empty uid => unresolved). No
+	// magic separator between sections needed because the format is
+	// already line-oriented and self-describing.
+	const denyPackages = linesFromText(snapshot.pkgText || "");
+	const denyPackagesShellArg = denyPackages
+		.map((p) => p.replace(/[^a-zA-Z0-9._\-]/g, ""))   // sanitise
+		.filter(Boolean)
+		.map((p) => `'${p}'`)                              // single-quote each
+		.join(" ");
+	const denyResolveScript = denyPackagesShellArg ? `
+resolve_pkg() {
+  PKG="$1"
+  # 1) /data/system/packages.list (the canonical PM cache)
+  if [ -f /data/system/packages.list ]; then
+    PUID=$(awk -v p="$PKG" '$1 == p { print $2; exit }' /data/system/packages.list 2>/dev/null)
+    if [ -n "$PUID" ] && [ "$PUID" -eq "$PUID" ] 2>/dev/null; then
+      printf '%s\\t%s\\n' "$PKG" "$PUID"; return
+    fi
+  fi
+  # 2) pm list packages -U <pkg>
+  LINE=$(pm list packages --user 0 -U "$PKG" 2>/dev/null | head -n1)
+  case "$LINE" in
+    package:"$PKG"' uid:'*)
+      PUID="\${LINE##* uid:}"; PUID="\${PUID%% *}"
+      if [ -n "$PUID" ] && [ "$PUID" -eq "$PUID" ] 2>/dev/null; then
+        printf '%s\\t%s\\n' "$PKG" "$PUID"; return
+      fi
+      ;;
+  esac
+  # 3) stat the data dir
+  for D in "/data/user/0/$PKG" "/data/data/$PKG"; do
+    [ -d "$D" ] || continue
+    PUID=$(stat -c '%u' "$D" 2>/dev/null)
+    if [ -n "$PUID" ] && [ "$PUID" -eq "$PUID" ] 2>/dev/null; then
+      printf '%s\\t%s\\n' "$PKG" "$PUID"; return
+    fi
+  done
+  printf '%s\\t\\n' "$PKG"   # unresolved
+}
+for PKG in ${denyPackagesShellArg}; do
+  resolve_pkg "$PKG"
+done
+true
+` : "true";
+
 	const [
 		unameRes,
 		taintRes,
@@ -873,6 +923,7 @@ async function gatherDiagnosticFacts(snapshot) {
 		kosizeRes,
 		modulesRes,
 		dmesgRes,
+		denyResolveRes,
 	] = await Promise.all([
 		probeExec(`uname -r 2>&1`),
 		probeExec(`cat /proc/sys/kernel/tainted 2>&1`),
@@ -883,6 +934,7 @@ async function gatherDiagnosticFacts(snapshot) {
 		probeExec(`[ -f ${shellQuote(files.ko)} ] && stat -c '%s' ${shellQuote(files.ko)} 2>&1 || echo missing`),
 		probeExec(`cat /proc/modules 2>&1`),
 		probeExec(`dmesg 2>&1 | grep -Ei 'pathmask|nohello|module_layout|disagrees|unknown symbol|invalid module|exec format' | tail -n 80`),
+		probeExec(denyResolveScript),
 	]);
 
 	const allModules = ok(modulesRes);
@@ -986,6 +1038,49 @@ async function gatherDiagnosticFacts(snapshot) {
 	const anyStale = stale.scope || stale.enableSyscallHooks ||
 		stale.syscallHooks || stale.denyUids;
 
+	// Parse the deny-package resolution into typed entries plus a
+	// resolved set we can compare to sysfs deny_uids. Three failure
+	// modes worth surfacing:
+	//   1. Some packages didn't resolve at all (typo in conf, app
+	//      uninstalled, or an isolated process that hides from PM).
+	//   2. Sysfs has UIDs that no current package resolves to (orphan
+	//      from a previously-installed package; stale insmod state).
+	//   3. Sysfs is missing UIDs that conf packages now resolve to
+	//      (user added a package and didn't hot-reload -> covered by
+	//      stale.denyUids already, no separate signal needed).
+	const denyPackagesEntries = [];
+	const unresolvedDenyPackages = [];
+	const resolvedDenyUids = new Set();
+	if (denyResolveRes && denyResolveRes.ok) {
+		for (const raw of (denyResolveRes.stdout || "").split(/\r?\n/)) {
+			const line = raw.replace(/\r$/, "");
+			if (!line) continue;
+			const tab = line.indexOf("\t");
+			if (tab < 0) continue;
+			const pkg = line.slice(0, tab).trim();
+			const uid = line.slice(tab + 1).trim();
+			if (!pkg) continue;
+			denyPackagesEntries.push({ pkg, uid: uid || null });
+			if (uid) resolvedDenyUids.add(uid);
+			else unresolvedDenyPackages.push(pkg);
+		}
+	}
+	// Orphan UIDs: sysfs has a UID that no current package resolves
+	// to. Only meaningful when the module is loaded and we have at
+	// least one resolved package (otherwise we'd false-positive when
+	// PM is briefly unavailable).
+	const sysDenyUidSet = new Set(
+		(sysfsParams.deny_uids || "").split(",").map((s) => s.trim()).filter(Boolean),
+	);
+	const orphanSysDenyUids = (moduleLoaded && resolvedDenyUids.size > 0)
+		? [...sysDenyUidSet].filter((u) => !resolvedDenyUids.has(u))
+		: [];
+	// But there's a third source of UIDs in sysfs: deny_uids.conf
+	// (manually-listed UIDs separate from package names). Don't flag
+	// those as orphans -- they're legitimate.
+	const directDenyUids = new Set(linesFromText(snapshot.uidText || ""));
+	const trueOrphans = orphanSysDenyUids.filter((u) => !directDenyUids.has(u));
+
 	return {
 		moduleLoaded,
 		moduleLine: ourModule || "",
@@ -1018,6 +1113,11 @@ async function gatherDiagnosticFacts(snapshot) {
 		confEnableSyscallHooks,
 		stale,
 		anyStale,
+		denyPackagesEntries,
+		unresolvedDenyPackages,
+		resolvedDenyUids: [...resolvedDenyUids],
+		orphanDenyUids: trueOrphans,
+		directDenyUids: [...directDenyUids],
 	};
 }
 
@@ -1066,6 +1166,29 @@ function computeVerdict(facts) {
 				],
 			};
 		}
+		// Unresolved deny packages: deny mode + at least one package
+		// in conf failed to resolve to a UID. This is the silent
+		// classic ("packages all set, but Holmes still sees stuff")
+		// because PathMask just skips unresolved entries on insmod
+		// and never warns. Worse, isolated processes (like the
+		// holmes_zygote helper) can resolve fine in deny_packages but
+		// run under a different UID at runtime; still, "0 of N
+		// resolved" is a clear typo case worth flagging.
+		const denyMode = (facts.sysfsParams.scope_mode || "") === "deny";
+		if (denyMode && facts.unresolvedDenyPackages && facts.unresolvedDenyPackages.length > 0) {
+			const total = (facts.denyPackagesEntries || []).length;
+			const unresolved = facts.unresolvedDenyPackages;
+			return {
+				level: FACT_WARN,
+				headline: `${unresolved.length}/${total} 个 deny 包名当前无法解析为 UID`,
+				suggestions: [
+					`未解析：${unresolved.join(", ")}`,
+					"包名拼错、应用未安装、或者它是隔离进程（隔离 UID 在 90000-98999 / 99000-99999 范围，PM 查不到）。",
+					"对照「应用黑名单」面板里实际显示的包名；如果是隔离进程，配 hide_isolated 而不是包名。",
+					"修好 conf 后点「保存并热重载」让新的 UID 解析生效。",
+				],
+			};
+		}
 		// Hooks-mounted-but-never-fired warning. If the user
 		// genuinely has zero deny UIDs hitting target paths this is
 		// false-positive friendly, so we only fire it when the
@@ -1073,7 +1196,6 @@ function computeVerdict(facts) {
 		// access-loop should have happened by now (>5 min).
 		const ageOldEnough = facts.bootStateUpdated > 0 &&
 			(facts.nowEpoch - facts.bootStateUpdated > 300);
-		const denyMode = (facts.sysfsParams.scope_mode || "") === "deny";
 		const denyUidCount = (facts.sysfsParams.deny_uids || "").split(",").filter(Boolean).length;
 		if (denyMode && denyUidCount > 0 && ageOldEnough &&
 		    facts.dmesgState.available &&
@@ -1364,6 +1486,42 @@ function buildKeyFacts(facts) {
 				"conf 已修改但内核仍在用旧值（点「保存并热重载」）",
 			));
 		}
+	}
+
+	// Deny-package -> UID map. We render this whenever any package
+	// is listed in conf, even when the module isn't loaded, because
+	// "did this package even resolve" is the question users have
+	// most often. Layout: <pkg> -> uid (or '(未解析)'). Compact view
+	// shows up to 8 packages then "...+N more"; full list is in
+	// the report's raw config dump anyway.
+	if (facts.denyPackagesEntries && facts.denyPackagesEntries.length > 0) {
+		const total = facts.denyPackagesEntries.length;
+		const unresolved = facts.unresolvedDenyPackages.length;
+		const headLevel = unresolved === 0 ? FACT_OK :
+			(unresolved === total ? FACT_BAD : FACT_WARN);
+		const summary = unresolved === 0
+			? `${total}/${total} 个包名全部解析成功`
+			: `${total - unresolved}/${total} 个包名解析成功，${unresolved} 个失败`;
+		lines.push(fmtFactRow("包名→UID 解析", headLevel, summary));
+		const preview = facts.denyPackagesEntries.slice(0, 8).map((e) => {
+			return `  ${e.pkg} -> ${e.uid || "(未解析)"}`;
+		});
+		for (const p of preview) lines.push(p);
+		if (total > 8) {
+			lines.push(`  …+${total - 8} 个未列出`);
+		}
+	}
+
+	// Orphan UIDs in sysfs: kernel deny_uids has UIDs that don't
+	// match any package now in conf and aren't in deny_uids.conf
+	// either. Most often means user removed a package from conf
+	// but didn't hot-reload, so kernel still hides for the old UID.
+	if (facts.orphanDenyUids && facts.orphanDenyUids.length > 0) {
+		lines.push(fmtFactRow(
+			"sysfs 孤立 UID",
+			FACT_WARN,
+			`${facts.orphanDenyUids.join(", ")}（来源不明，多半是删过包名但没热重载）`,
+		));
 	}
 
 	const otherCount = facts.otherLkms.length;
@@ -1700,15 +1858,53 @@ function scheduleBootPolling(bootState) {
 		if (busy) return;
 		readFile(files.bootState).then((text) => {
 			const next = parseBootState(text);
+			const wasWaiting = lastSnapshot.bootState && BOOT_WAITING_STATES.has(lastSnapshot.bootState.state);
 			lastSnapshot.bootStateText = text;
 			lastSnapshot.bootState = next;
 			return safeExec(`date +%s 2>/dev/null || echo 0`).then((nowText) => {
 				lastSnapshot.nowEpoch = Number.parseInt((nowText || "0").trim(), 10) || 0;
 				updateHealthList();
-				if (!BOOT_WAITING_STATES.has(next.state)) stopBootPolling();
+				if (!BOOT_WAITING_STATES.has(next.state)) {
+					stopBootPolling();
+					// Transition: was waiting, now terminal. Run one
+					// auto-diagnostic so the verdict box reflects the
+					// final boot outcome without the user having to
+					// click. Guarded by `wasWaiting` so we don't fire
+					// twice in a row if the poll catches the state
+					// after a previous tick already saw it terminal.
+					if (wasWaiting) {
+						autoRunDiagnostic("自动诊断中（开机完成）...");
+					}
+				}
 			});
 		}).catch(() => {});
 	}, BOOT_POLL_INTERVAL_MS);
+}
+
+/*
+ * Run diagnostics in the background without claiming the busy lock
+ * (so the user can still interact with checkboxes etc. while we
+ * poll). Failure is silent -- this is best-effort. The status text
+ * reflects the operation only briefly so it doesn't block ordinary
+ * UI feedback.
+ */
+function autoRunDiagnostic(msg) {
+	if (busy) {
+		// User is doing something; defer until they're done. We'll
+		// catch it next time refreshConfig completes (page bootstrap)
+		// or next boot poll transition.
+		return;
+	}
+	const prev = statusText.textContent;
+	statusText.textContent = msg || "自动诊断中...";
+	refreshDiagnostics()
+		.then(() => {
+			// statusText is overwritten by refreshDiagnostics on
+			// success ("诊断已生成"), leave it as is.
+		})
+		.catch(() => {
+			statusText.textContent = prev;
+		});
 }
 
 function describeBootState(snapshot, moduleLoaded) {
@@ -2194,6 +2390,99 @@ true
 	statusText.textContent = "诊断已生成";
 	showToast("诊断报告已生成");
 	updateHealthList();
+	// Save snapshot to /data/adb/pathmask/diag-history/. Best-effort:
+	// any failure here (FS read-only, dir not creatable) is logged
+	// but doesn't break the diagnostic flow itself.
+	saveDiagnosticHistory(lastReport).catch(() => {});
+}
+
+const DIAG_HISTORY_DIR = `${CONFIGDIR}/diag-history`;
+const DIAG_HISTORY_KEEP = 5;
+
+async function saveDiagnosticHistory(report) {
+	if (!report) return;
+	const epoch = Math.floor(Date.now() / 1000);
+	// One file per snapshot. Keep at most DIAG_HISTORY_KEEP, trim
+	// older ones in the same shell to keep this single round trip.
+	const path = `${DIAG_HISTORY_DIR}/diag-${epoch}.txt`;
+	// Heredoc with a quoted marker keeps the report content literal
+	// (no $/`/\ expansion). Marker includes a random-ish suffix so a
+	// report that quotes itself can't accidentally close the heredoc.
+	const marker = `PMHIST_EOF_${epoch}_${Math.random().toString(36).slice(2, 8)}`;
+	const cmd = `
+mkdir -p ${shellQuote(DIAG_HISTORY_DIR)} 2>/dev/null || true
+chmod 0700 ${shellQuote(DIAG_HISTORY_DIR)} 2>/dev/null || true
+cat > ${shellQuote(path)} <<'${marker}'
+${report}
+${marker}
+chmod 0600 ${shellQuote(path)} 2>/dev/null || true
+# Trim older snapshots: keep the newest ${DIAG_HISTORY_KEEP} only.
+ls -1t ${shellQuote(DIAG_HISTORY_DIR)}/diag-*.txt 2>/dev/null | awk -v keep=${DIAG_HISTORY_KEEP} 'NR>keep' | xargs -r rm -f 2>/dev/null || true
+true
+`;
+	await safeExec(cmd);
+}
+
+async function listDiagnosticHistory() {
+	const out = await safeExec(`ls -1t ${shellQuote(DIAG_HISTORY_DIR)}/diag-*.txt 2>/dev/null || true`);
+	return (out || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+}
+
+async function readDiagnosticHistory(path) {
+	return await safeExec(`[ -f ${shellQuote(path)} ] && cat ${shellQuote(path)} || echo "(not found)"`);
+}
+
+let historySelectedPath = "";
+
+async function openHistoryModal() {
+	const list = await listDiagnosticHistory();
+	const ul = $("#historyList");
+	const view = $("#historyView");
+	if (!ul || !view) return;
+	ul.textContent = "";
+	view.value = "";
+	historySelectedPath = "";
+
+	if (list.length === 0) {
+		const li = document.createElement("li");
+		li.className = "healthItem level-info";
+		li.textContent = "（暂无历史诊断。每次点「生成诊断」会自动保存一份。）";
+		ul.append(li);
+		openModal("historyModal");
+		return;
+	}
+
+	for (const path of list) {
+		// Path looks like .../diag-1779623417.txt; pull the epoch out
+		// and render as local time so users can compare runs at a
+		// glance without doing date math.
+		const m = path.match(/diag-(\d+)\.txt$/);
+		const epoch = m ? Number.parseInt(m[1], 10) : 0;
+		const when = epoch ? new Date(epoch * 1000).toLocaleString() : path;
+		const li = document.createElement("li");
+		li.className = "healthItem level-info historyItem";
+		li.tabIndex = 0;
+		li.textContent = when;
+		li.dataset.path = path;
+		li.addEventListener("click", () => selectHistory(path, li));
+		li.addEventListener("keydown", (e) => {
+			if (e.key === "Enter" || e.key === " ") {
+				e.preventDefault();
+				selectHistory(path, li);
+			}
+		});
+		ul.append(li);
+	}
+	openModal("historyModal");
+}
+
+async function selectHistory(path, liElem) {
+	const all = $("#historyList").querySelectorAll(".historyItem");
+	for (const node of all) node.classList.remove("active");
+	if (liElem) liElem.classList.add("active");
+	historySelectedPath = path;
+	const text = await readDiagnosticHistory(path);
+	$("#historyView").value = text || "(空)";
 }
 
 function switchTab(tab) {
@@ -2249,6 +2538,8 @@ document.addEventListener("keydown", (event) => {
 
 $("#addPathBtn").addEventListener("click", () => addPathRow());
 $("#pathHelpBtn").addEventListener("click", () => openModal("pathHelpModal"));
+$("#historyBtn").addEventListener("click", () => runAction("正在加载历史诊断...", openHistoryModal).catch(() => {}));
+$("#historyCopyBtn").addEventListener("click", () => copyText($("#historyView").value).catch((error) => showToast(error.message)));
 $("#loadAppsBtn").addEventListener("click", () => runAction("正在加载应用...", loadApps).catch(() => {}));
 $("#refreshBtn").addEventListener("click", () => runAction("正在刷新...", refreshConfig).catch(() => {}));
 
@@ -2296,7 +2587,21 @@ $("#denyUidsInput").addEventListener("input", updateHealthList);
 $("#waitSecondsInput").addEventListener("input", updateHealthList);
 
 try {
-	runAction("正在读取配置...", refreshConfig).catch((error) => {
+	runAction("正在读取配置...", refreshConfig).then(() => {
+		// Auto-run diagnostics on page load when service.sh has
+		// already finished (loaded / skipped-* / failed-*). For
+		// waiting states we let scheduleBootPolling pick up the
+		// transition and trigger then. For paused / unknown we
+		// still run -- the verdict will reflect the actual state.
+		const state = (lastSnapshot.bootState && lastSnapshot.bootState.state) || "";
+		if (state && !BOOT_WAITING_STATES.has(state)) {
+			autoRunDiagnostic("自动诊断中（页面加载）...");
+		} else if (!state) {
+			// No boot_state file at all -- service.sh likely never
+			// ran. Still run a diagnostic so the verdict catches it.
+			autoRunDiagnostic("自动诊断中（页面加载）...");
+		}
+	}).catch((error) => {
 		statusText.textContent = "读取失败";
 		showToast(error.message);
 	});

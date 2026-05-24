@@ -764,3 +764,22 @@ button:active {
 	font-size: 13px;
 	line-height: 1.5;
 }
+
+
+.historyItem {
+	cursor: pointer;
+	padding: 6px 10px;
+	border-radius: 6px;
+	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.historyItem:hover,
+.historyItem:focus {
+	background: color-mix(in srgb, CanvasText 6%, transparent);
+	outline: none;
+}
+
+.historyItem.active {
+	background: color-mix(in srgb, #2196f3 18%, Canvas);
+	border-color: color-mix(in srgb, #2196f3 50%, transparent);
+}
