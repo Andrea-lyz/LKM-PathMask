@@ -1819,7 +1819,6 @@ true
 	showToast("诊断报告已生成");
 	updateHealthList();
 }
-}
 
 function switchTab(tab) {
 	for (const button of $$(".tab")) {
