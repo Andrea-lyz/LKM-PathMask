@@ -79,40 +79,61 @@ module_param(hide_isolated, bool, 0644);
 MODULE_PARM_DESC(hide_isolated, "Also hide from Android isolated-process UIDs (90000-98999 App Zygote, 99000-99999 plain isolated) in deny scope");
 
 /*
- * `enable_syscall_hooks` gates the seven `__arm64_sys_*` kretprobes
- * (newfstatat, statx, faccessat, faccessat2, readlinkat, openat,
- * openat2). Those probes were introduced in v2.2.5/v2.2.7 to cover
- * stat()/access()/readlink()/openat() paths that ThinLTO inlines
- * away from `vfs_getattr` / `inode_permission` on Android GKI 5.15+.
+ * Syscall fallback hooks: 7 kretprobes on the arm64 syscall entry stubs
+ * `__arm64_sys_{newfstatat,statx,faccessat,faccessat2,readlinkat,openat,
+ * openat2}`. Introduced in v2.2.5/v2.2.7 to cover stat()/access()/
+ * readlink()/openat() paths that ThinLTO inlines away from `vfs_getattr`
+ * / `inode_permission` on Android GKI 5.15+.
  *
  * The trade-off is that these hooks sit on the hottest path in the
- * kernel: every dlopen/fopen/access/"does this exist" call -- in
- * any process -- executes them. The kretprobe entry+exit trampoline
- * on arm64 adds a small but very measurable overhead per call
- * (hundreds of nanoseconds to ~1 microsecond on Snapdragon-class
- * SoCs). Detectors that fingerprint the environment by running a
- * tight stat()/access() loop and timing it against a baseline can
- * pick that up. Holmes' "Abnormal Environment (04)" was bisected
- * to exactly the v2.2.5 probe-set introduction (v2.2.4 fine,
- * v2.2.5+ trips). The detection target is the *presence of these
- * hooks*, not their effect, so flipping `should_hide_for_current()`
- * doesn't help -- the trampoline cost is paid before we get a
- * chance to early-return.
+ * kernel: every dlopen/fopen/access/"does this exist" call -- in any
+ * process -- executes them. The kretprobe entry+exit trampoline on
+ * arm64 adds a small but very measurable overhead per call (hundreds
+ * of ns to ~1us on Snapdragon-class SoCs). Detectors that time-
+ * fingerprint a tight stat()/access() loop can pick that up. Holmes'
+ * "Abnormal Environment (04)" was bisected on real device data to a
+ * single syscall: it trips iff `__arm64_sys_faccessat` is hooked,
+ * regardless of which other probes are active or whether they actually
+ * fire on Holmes' UID. The most plausible explanation is that
+ * Holmes uses access(F_OK), which is the cheapest of these syscalls
+ * (no perm check, no inode fill), so the trampoline percentage
+ * overhead is the most visible. faccessat2 is fine even though it
+ * shares the trampoline machinery, because bionic's access() picks
+ * faccessat for flag=0 callers, and Holmes apparently hardcodes that.
  *
- * Default is now `0` (off): only the four core hooks
- * (inode_permission + vfs_getattr + getdents64 + the one we
- * keep below for openat-target enforcement) stay active, matching
- * v2.2.4 syscall-visibility behaviour. Users who hit a detector
- * that bypasses inode_permission via ThinLTO inlining and need the
- * stronger coverage can set this to `1`. The
- * `inode_permission` / `vfs_getattr` / `__arm64_sys_getdents64`
- * hooks remain unconditionally enabled because they are not on
- * a detector-friendly hot path.
+ * Two knobs control which of the 7 are registered:
+ *
+ *   syscall_hooks=
+ *     Comma-separated allowlist. Tokens are the short syscall names
+ *     ("newfstatat", "statx", "faccessat", "faccessat2", "readlinkat",
+ *     "openat", "openat2") plus "all" / "none". Empty string falls
+ *     through to enable_syscall_hooks for backward compat.
+ *     Default: 6-of-7, every probe except faccessat. This is the
+ *     observed sweet spot from the bisect: chunqiu / native
+ *     anti-cheat scanners use stat/openat (covered), Holmes uses
+ *     access(F_OK) timing (not covered, by design).
+ *
+ *   enable_syscall_hooks=
+ *     Legacy boolean kept for backward compatibility with
+ *     pre-v2.4 configs and CLI insmod calls. Only consulted when
+ *     syscall_hooks is empty; "1" enables all 7 probes, "0"
+ *     disables all 7.
+ *
+ * `inode_permission`, `vfs_getattr`, and `__arm64_sys_getdents64`
+ * remain unconditionally hooked because they are not on a detector-
+ * friendly hot path.
  */
 static bool enable_syscall_hooks;
 module_param(enable_syscall_hooks, bool, 0644);
 MODULE_PARM_DESC(enable_syscall_hooks,
-	"Hook __arm64_sys_{newfstatat,statx,faccessat,faccessat2,readlinkat,openat,openat2} for ThinLTO-resistant coverage. Default 0 because the kretprobe trampoline cost is detectable by timing-based environment probes (e.g. Holmes Abnormal Environment 04). Enable only if a detector you care about bypasses inode_permission/vfs_getattr.");
+	"Legacy boolean: 1 = enable all 7 __arm64_sys_* fallback hooks, 0 = none. Only consulted when `syscall_hooks` is empty. Modern callers should use `syscall_hooks=` to pick a subset.");
+
+#define PM_SYSCALL_HOOKS_LEN 256
+static char syscall_hooks[PM_SYSCALL_HOOKS_LEN] =
+	"newfstatat,statx,faccessat2,readlinkat,openat,openat2";
+module_param_string(syscall_hooks, syscall_hooks, sizeof(syscall_hooks), 0644);
+MODULE_PARM_DESC(syscall_hooks,
+	"Comma-separated subset of __arm64_sys_* fallback probes to register. Tokens: newfstatat,statx,faccessat,faccessat2,readlinkat,openat,openat2 (or 'all' / 'none'). Default omits faccessat because it is the only probe Holmes Abnormal Environment 04 fingerprints via access(F_OK) timing. Empty string falls back to enable_syscall_hooks.");
 
 static char scope_mode[16] = "global";
 module_param_string(scope_mode, scope_mode, sizeof(scope_mode), 0644);
@@ -693,18 +714,124 @@ typedef int (*pm_syscall_entry_t)(struct kretprobe_instance *,
 
 static struct pm_syscall_probe {
 	const char *symbol;
+	const char *short_name;
 	pm_syscall_entry_t entry;
 	struct kretprobe rp;
 	bool registered;
+	bool enabled;
 } pm_syscall_probes[] = {
-	{ .symbol = "__arm64_sys_newfstatat", .entry = sys_path_entry   },
-	{ .symbol = "__arm64_sys_statx",      .entry = sys_path_entry   },
-	{ .symbol = "__arm64_sys_faccessat",  .entry = sys_path_entry   },
-	{ .symbol = "__arm64_sys_faccessat2", .entry = sys_path_entry   },
-	{ .symbol = "__arm64_sys_readlinkat", .entry = sys_path_entry   },
-	{ .symbol = "__arm64_sys_openat",     .entry = sys_openat_entry },
-	{ .symbol = "__arm64_sys_openat2",    .entry = sys_openat_entry },
+	{ .symbol = "__arm64_sys_newfstatat", .short_name = "newfstatat",
+	  .entry = sys_path_entry   },
+	{ .symbol = "__arm64_sys_statx",      .short_name = "statx",
+	  .entry = sys_path_entry   },
+	{ .symbol = "__arm64_sys_faccessat",  .short_name = "faccessat",
+	  .entry = sys_path_entry   },
+	{ .symbol = "__arm64_sys_faccessat2", .short_name = "faccessat2",
+	  .entry = sys_path_entry   },
+	{ .symbol = "__arm64_sys_readlinkat", .short_name = "readlinkat",
+	  .entry = sys_path_entry   },
+	{ .symbol = "__arm64_sys_openat",     .short_name = "openat",
+	  .entry = sys_openat_entry },
+	{ .symbol = "__arm64_sys_openat2",    .short_name = "openat2",
+	  .entry = sys_openat_entry },
 };
+
+/*
+ * Parse `syscall_hooks=` into per-entry `enabled` flags. Recognised
+ * tokens (case-sensitive, surrounding whitespace stripped):
+ *
+ *   "all"     -> every probe enabled
+ *   "none"    -> every probe disabled
+ *   shortname -> just that probe enabled (additive)
+ *
+ * "all" / "none" act as a reset over what came before, so users can
+ * write "all,~faccessat"-style expressions as "all" + a follow-up
+ * conf-side filter -- but the kernel does not implement the "~"
+ * token itself; that's the WebUI's job.
+ *
+ * When `syscall_hooks` is empty we honour the legacy
+ * `enable_syscall_hooks` boolean (1 = all, 0 = none) so older
+ * configs keep working unchanged.
+ *
+ * Returns the number of enabled probes after parsing.
+ */
+static unsigned int parse_syscall_hooks(void)
+{
+	char *buf, *cursor, *item;
+	unsigned int i, enabled_count = 0;
+	bool any_token_seen = false;
+
+	for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++)
+		pm_syscall_probes[i].enabled = false;
+
+	if (!syscall_hooks[0]) {
+		/* Legacy path. */
+		if (enable_syscall_hooks) {
+			for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++)
+				pm_syscall_probes[i].enabled = true;
+			return ARRAY_SIZE(pm_syscall_probes);
+		}
+		return 0;
+	}
+
+	buf = kstrdup(syscall_hooks, GFP_KERNEL);
+	if (!buf) {
+		pr_warn(PM_LOG_PREFIX
+			"kstrdup(syscall_hooks) failed, treating as 'none'\n");
+		return 0;
+	}
+
+	cursor = buf;
+	while ((item = strsep(&cursor, ",")) != NULL) {
+		item = strim(item);
+		if (!*item)
+			continue;
+		any_token_seen = true;
+
+		if (!strcmp(item, "all")) {
+			for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++)
+				pm_syscall_probes[i].enabled = true;
+			continue;
+		}
+		if (!strcmp(item, "none")) {
+			for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++)
+				pm_syscall_probes[i].enabled = false;
+			continue;
+		}
+
+		for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++) {
+			if (!strcmp(item, pm_syscall_probes[i].short_name)) {
+				pm_syscall_probes[i].enabled = true;
+				break;
+			}
+		}
+		if (i == ARRAY_SIZE(pm_syscall_probes))
+			pr_warn(PM_LOG_PREFIX
+				"unknown syscall_hooks token '%s' (ignored)\n",
+				item);
+	}
+
+	kfree(buf);
+
+	/*
+	 * If the conf had only whitespace tokens, treat that the same as
+	 * empty -> fall back to the legacy boolean. Any concrete token
+	 * (even an unrecognised one) means the user intended a subset.
+	 */
+	if (!any_token_seen) {
+		if (enable_syscall_hooks) {
+			for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++)
+				pm_syscall_probes[i].enabled = true;
+			return ARRAY_SIZE(pm_syscall_probes);
+		}
+		return 0;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++)
+		if (pm_syscall_probes[i].enabled)
+			enabled_count++;
+	return enabled_count;
+}
 
 static void register_syscall_hooks(void)
 {
@@ -713,6 +840,12 @@ static void register_syscall_hooks(void)
 	for (i = 0; i < ARRAY_SIZE(pm_syscall_probes); i++) {
 		struct pm_syscall_probe *p = &pm_syscall_probes[i];
 		int ret;
+
+		if (!p->enabled) {
+			pr_info(PM_LOG_PREFIX "skip %s (disabled)\n",
+				p->symbol);
+			continue;
+		}
 
 		p->rp.kp.symbol_name = p->symbol;
 		p->rp.entry_handler = p->entry;
@@ -919,11 +1052,20 @@ static int __init pathmask_init(void)
 	}
 	pr_info(PM_LOG_PREFIX "hooked vfs_getattr\n");
 
-	if (enable_syscall_hooks) {
-		register_syscall_hooks();
-	} else {
-		pr_info(PM_LOG_PREFIX
-			"enable_syscall_hooks=0 -- skipping __arm64_sys_* probes (Holmes Abnormal Environment 04 mitigation)\n");
+	{
+		unsigned int wanted = parse_syscall_hooks();
+
+		if (wanted) {
+			register_syscall_hooks();
+			pr_info(PM_LOG_PREFIX
+				"syscall fallback: %u of %u probe(s) requested\n",
+				wanted,
+				(unsigned int)ARRAY_SIZE(pm_syscall_probes));
+		} else {
+			pr_info(PM_LOG_PREFIX
+				"syscall fallback: 0 probes (enable_syscall_hooks=%d, syscall_hooks=\"%s\") -- skipping __arm64_sys_* probes\n",
+				enable_syscall_hooks, syscall_hooks);
+		}
 	}
 
 	if (hide_dirents) {
@@ -947,9 +1089,9 @@ static int __init pathmask_init(void)
 	}
 
 	pr_info(PM_LOG_PREFIX
-		"loaded -- %u target(s) hidden, scope=%s, deny_uid_count=%u hide_isolated=%d enable_syscall_hooks=%d\n",
+		"loaded -- %u target(s) hidden, scope=%s, deny_uid_count=%u hide_isolated=%d enable_syscall_hooks=%d syscall_hooks=\"%s\"\n",
 		target_count, scope_mode, deny_uid_count, hide_isolated,
-		enable_syscall_hooks);
+		enable_syscall_hooks, syscall_hooks);
 	return 0;
 }
 

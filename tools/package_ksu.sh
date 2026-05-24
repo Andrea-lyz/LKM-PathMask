@@ -18,7 +18,12 @@
 #   TARGET_PATHS    comma-separated list of target lines (or
 #                   legacy TARGET_PATH for the same effect)
 #   HIDE_DIRENTS    "0" or "1"
-#   ENABLE_SYSCALL_HOOKS   "0" or "1"
+#   ENABLE_SYSCALL_HOOKS   "0" or "1" (master toggle for the 7
+#                          __arm64_sys_* fallback hooks)
+#   SYSCALL_HOOKS    comma-separated subset of __arm64_sys_* probes
+#                    to register, e.g. "newfstatat,statx,openat".
+#                    Or "all" / "none". Empty falls back to the
+#                    template default (faccessat omitted).
 #   SCOPE_MODE      "global" or "deny"
 #   DENY_PACKAGES   comma-separated package names
 #   DENY_UIDS       comma-separated UIDs
@@ -100,6 +105,9 @@ fi
 if is_set ENABLE_SYSCALL_HOOKS; then
 	printf '%s' "$ENABLE_SYSCALL_HOOKS" > "$STAGE_DIR/enable_syscall_hooks.conf"
 fi
+if is_set SYSCALL_HOOKS; then
+	printf '%s' "$SYSCALL_HOOKS" > "$STAGE_DIR/syscall_hooks.conf"
+fi
 if is_set SCOPE_MODE; then
 	printf '%s' "$SCOPE_MODE" > "$STAGE_DIR/scope_mode.conf"
 fi
@@ -132,6 +140,7 @@ echo "Created KernelSU package: $OUTPUT"
 echo "Target paths file:        $STAGE_DIR/target_path.conf"
 echo "Hide dirents file:        $STAGE_DIR/hide_dirents.conf"
 echo "Enable syscall hooks file:$STAGE_DIR/enable_syscall_hooks.conf"
+echo "Syscall hooks subset:     $STAGE_DIR/syscall_hooks.conf"
 echo "Scope mode file:          $STAGE_DIR/scope_mode.conf"
 echo "Deny packages file:       $STAGE_DIR/deny_packages.conf"
 echo "Deny UIDs file:           $STAGE_DIR/deny_uids.conf"

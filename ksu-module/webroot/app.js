@@ -49,6 +49,28 @@ const DEFAULT_DENY_PACKAGES = [
 	"luna.safe.luna",
 ];
 
+// Recommended subset of __arm64_sys_* fallback hooks. faccessat is
+// intentionally excluded: bisect data on real devices showed Holmes
+// "Abnormal Environment 04" trips iff faccessat is hooked, regardless
+// of whether the probe ever actually fires for Holmes' UID. Most
+// sane callers go through faccessat2 / openat / newfstatat anyway,
+// so leaving faccessat off costs almost nothing in coverage. See
+// MODULE_PARM_DESC(syscall_hooks) and the kernel-side comment for
+// the reasoning chain.
+const ALL_SYSCALL_HOOKS = [
+	"newfstatat",
+	"statx",
+	"faccessat",
+	"faccessat2",
+	"readlinkat",
+	"openat",
+	"openat2",
+];
+const DEFAULT_SYSCALL_HOOKS = ALL_SYSCALL_HOOKS.filter(
+	(name) => name !== "faccessat",
+);
+const SYSCALL_HOOK_SET = new Set(ALL_SYSCALL_HOOKS);
+
 const DEFAULT_WAIT_SECONDS = 60;
 const BOOT_POLL_INTERVAL_MS = 5000;
 const BOOT_WAITING_STATES = new Set(["init", "waiting-targets", "waiting-packages"]);
@@ -61,6 +83,7 @@ const files = {
 	denyUids: `${CONFIGDIR}/deny_uids.conf`,
 	waitSeconds: `${CONFIGDIR}/wait_seconds.conf`,
 	enableSyscallHooks: `${CONFIGDIR}/enable_syscall_hooks.conf`,
+	syscallHooks: `${CONFIGDIR}/syscall_hooks.conf`,
 	bootState: `${CONFIGDIR}/boot_state`,
 	failCount: `${CONFIGDIR}/load_fail_count`,
 	failReason: `${CONFIGDIR}/load_fail_reason`,
@@ -217,6 +240,74 @@ function parseBoolish(text, fallback = false) {
 	if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
 	if (v === "0" || v === "false" || v === "no" || v === "off") return false;
 	return fallback;
+}
+
+// Decode the contents of /data/adb/pathmask/syscall_hooks.conf into
+// the set of currently-enabled syscall short names. Tolerates either
+// a single comma-separated line ("newfstatat,statx") or one token per
+// line, in any combination -- service.sh joins both forms before
+// passing to insmod, so both should round-trip through here.
+//
+// Special tokens "all" and "none" reset the running set so that, e.g.,
+// a conf containing "all" reads back as every checkbox ticked. An
+// empty conf falls back to the recommended default (DEFAULT_SYSCALL_HOOKS).
+function parseSyscallHooksText(text) {
+	const enabled = new Set();
+	let anyToken = false;
+	const raw = (text || "").split(/[\s,]+/);
+	for (const token of raw) {
+		const t = token.trim();
+		if (!t || t.startsWith("#")) continue;
+		anyToken = true;
+		if (t === "all") {
+			for (const name of ALL_SYSCALL_HOOKS) enabled.add(name);
+			continue;
+		}
+		if (t === "none") {
+			enabled.clear();
+			continue;
+		}
+		if (SYSCALL_HOOK_SET.has(t)) {
+			enabled.add(t);
+		}
+		// Unknown tokens are silently ignored here; service.sh and the
+		// kernel both warn separately so we don't double-flag them.
+	}
+	if (!anyToken) {
+		// Empty conf -> use the recommended subset.
+		return new Set(DEFAULT_SYSCALL_HOOKS);
+	}
+	return enabled;
+}
+
+function applySyscallHooksToCheckboxes(text) {
+	const enabled = parseSyscallHooksText(text);
+	for (const cb of document.querySelectorAll('#syscallHooksDetails input[data-syscall]')) {
+		cb.checked = enabled.has(cb.dataset.syscall);
+	}
+}
+
+function collectSyscallHooks() {
+	const result = [];
+	for (const cb of document.querySelectorAll('#syscallHooksDetails input[data-syscall]')) {
+		if (cb.checked) result.push(cb.dataset.syscall);
+	}
+	return result;
+}
+
+// When the master toggle is off the per-syscall list is meaningless --
+// service.sh forces "none" anyway -- so disable the checkboxes to make
+// the dependency obvious. Keep the <details> expandable either way so
+// the user can see what would be enabled if they flip the master back on.
+function updateSyscallHooksDisabledState() {
+	const master = $("#enableSyscallHooksInput");
+	const details = $("#syscallHooksDetails");
+	if (!master || !details) return;
+	const off = !master.checked;
+	for (const cb of details.querySelectorAll('input[data-syscall]')) {
+		cb.disabled = off;
+	}
+	details.classList.toggle("disabled", off);
 }
 
 function setText(selector, value) {
@@ -565,6 +656,7 @@ async function refreshConfig() {
 	const uidText = await readFile(files.denyUids);
 	const waitText = await readFile(files.waitSeconds);
 	const enableSyscallHooksText = await readFile(files.enableSyscallHooks);
+	const syscallHooksText = await readFile(files.syscallHooks);
 	const bootStateText = await readFile(files.bootState);
 	const moduleText = await safeExec(`grep '^${MODULE_NAME} ' /proc/modules || true`);
 	const legacyModuleText = await safeExec(`grep '^${LEGACY_MODULE_NAME} ' /proc/modules || true`);
@@ -579,7 +671,9 @@ async function refreshConfig() {
 
 	renderPaths(linesFromText(targetText));
 	$("#hideDirentsInput").checked = (hideText.trim() || "1") !== "0";
-	$("#enableSyscallHooksInput").checked = parseBoolish(enableSyscallHooksText, false);
+	$("#enableSyscallHooksInput").checked = parseBoolish(enableSyscallHooksText, true);
+	applySyscallHooksToCheckboxes(syscallHooksText);
+	updateSyscallHooksDisabledState();
 	const scope = (scopeText.trim() || "deny") === "global" ? "global" : "deny";
 	document.querySelector(`input[name="scope"][value="${scope}"]`).checked = true;
 	const packageLines = linesFromText(pkgText);
@@ -958,6 +1052,7 @@ async function saveConfig() {
 	await writeLines(files.targets, collectPaths());
 	await writeLines(files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]);
 	await writeLines(files.enableSyscallHooks, [$("#enableSyscallHooksInput").checked ? "1" : "0"]);
+	await writeLines(files.syscallHooks, [collectSyscallHooks().join(",")]);
 	await writeLines(files.scope, [scope]);
 	await writeLines(files.denyPackages, [...selectedPackages].sort());
 	await writeLines(files.denyUids, linesFromText($("#denyUidsInput").value));
@@ -973,6 +1068,7 @@ async function reloadModule() {
 	await writeLines(files.targets, collectPaths());
 	await writeLines(files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]);
 	await writeLines(files.enableSyscallHooks, [$("#enableSyscallHooksInput").checked ? "1" : "0"]);
+	await writeLines(files.syscallHooks, [collectSyscallHooks().join(",")]);
 	await writeLines(files.scope, [scope]);
 	await writeLines(files.denyPackages, [...selectedPackages].sort());
 	await writeLines(files.denyUids, linesFromText($("#denyUidsInput").value));
@@ -999,7 +1095,8 @@ async function pauseHiding() {
 async function restoreDefaults() {
 	await writeLines(files.targets, DEFAULT_TARGET_PATHS);
 	await writeLines(files.hideDirents, ["1"]);
-	await writeLines(files.enableSyscallHooks, ["0"]);
+	await writeLines(files.enableSyscallHooks, ["1"]);
+	await writeLines(files.syscallHooks, [DEFAULT_SYSCALL_HOOKS.join(",")]);
 	await writeLines(files.scope, ["deny"]);
 	await writeLines(files.denyPackages, DEFAULT_DENY_PACKAGES);
 	await writeLines(files.denyUids, []);
@@ -1173,6 +1270,11 @@ $("#addPathBtn").addEventListener("click", () => addPathRow());
 $("#pathHelpBtn").addEventListener("click", () => openModal("pathHelpModal"));
 $("#loadAppsBtn").addEventListener("click", () => runAction("正在加载应用...", loadApps).catch(() => {}));
 $("#refreshBtn").addEventListener("click", () => runAction("正在刷新...", refreshConfig).catch(() => {}));
+
+// Live-update the per-syscall sub-panel disabled state when the master
+// toggle is flipped, so it visibly tracks the dependency without waiting
+// for the next refresh.
+$("#enableSyscallHooksInput").addEventListener("change", updateSyscallHooksDisabledState);
 $("#searchInput").addEventListener("input", renderApps);
 $("#saveBtn").addEventListener("click", () => runAction("正在保存...", saveConfig).catch(() => {}));
 $("#pauseBtn").addEventListener("click", () => runAction("正在暂停隐藏...", pauseHiding).catch(() => {}));

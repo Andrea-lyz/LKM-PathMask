@@ -19,6 +19,7 @@ MOD_DENY_UIDS_CONFIG="$MODDIR/deny_uids.conf"
 MOD_DENY_PACKAGES_CONFIG="$MODDIR/deny_packages.conf"
 MOD_WAIT_SECONDS_CONFIG="$MODDIR/wait_seconds.conf"
 MOD_ENABLE_SYSCALL_HOOKS_CONFIG="$MODDIR/enable_syscall_hooks.conf"
+MOD_SYSCALL_HOOKS_CONFIG="$MODDIR/syscall_hooks.conf"
 
 CONFIG_PATH="$PERSIST_DIR/target_path.conf"
 HIDE_DIRENTS_CONFIG="$PERSIST_DIR/hide_dirents.conf"
@@ -27,6 +28,7 @@ DENY_UIDS_CONFIG="$PERSIST_DIR/deny_uids.conf"
 DENY_PACKAGES_CONFIG="$PERSIST_DIR/deny_packages.conf"
 WAIT_SECONDS_CONFIG="$PERSIST_DIR/wait_seconds.conf"
 ENABLE_SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/enable_syscall_hooks.conf"
+SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/syscall_hooks.conf"
 LEGACY_TARGET_WAIT_SECONDS_CONFIG="$PERSIST_DIR/target_wait_seconds.conf"
 LEGACY_PACKAGE_WAIT_SECONDS_CONFIG="$PERSIST_DIR/package_wait_seconds.conf"
 BOOT_STATE_PATH="$PERSIST_DIR/boot_state"
@@ -37,6 +39,7 @@ SCOPE_MODE=deny
 DENY_UIDS=""
 WAIT_SECONDS=60
 ENABLE_SYSCALL_HOOKS=0
+SYSCALL_HOOKS=""
 UNRESOLVED_PACKAGES=0
 
 read_load_failure_count() {
@@ -225,6 +228,7 @@ init_persistent_config() {
 		DENY_PACKAGES_CONFIG="$MOD_DENY_PACKAGES_CONFIG"
 		WAIT_SECONDS_CONFIG="$MOD_WAIT_SECONDS_CONFIG"
 		ENABLE_SYSCALL_HOOKS_CONFIG="$MOD_ENABLE_SYSCALL_HOOKS_CONFIG"
+		SYSCALL_HOOKS_CONFIG="$MOD_SYSCALL_HOOKS_CONFIG"
 		return
 	fi
 
@@ -263,7 +267,20 @@ init_persistent_config() {
 	seed_config_file "$DENY_UIDS_CONFIG" "$MOD_DENY_UIDS_CONFIG" ""
 	seed_config_file "$DENY_PACKAGES_CONFIG" "$MOD_DENY_PACKAGES_CONFIG" ""
 	seed_config_file "$WAIT_SECONDS_CONFIG" "$MOD_WAIT_SECONDS_CONFIG" "60"
-	seed_config_file "$ENABLE_SYSCALL_HOOKS_CONFIG" "$MOD_ENABLE_SYSCALL_HOOKS_CONFIG" "0"
+	seed_config_file "$ENABLE_SYSCALL_HOOKS_CONFIG" "$MOD_ENABLE_SYSCALL_HOOKS_CONFIG" "1"
+	seed_config_file "$SYSCALL_HOOKS_CONFIG" "$MOD_SYSCALL_HOOKS_CONFIG" "newfstatat,statx,faccessat2,readlinkat,openat,openat2"
+
+	# Existing installs from v2.2.8 - v2.3.1 shipped enable_syscall_hooks=0
+	# as a defensive default (Holmes 04 mitigation pre-bisect). Now that the
+	# bisect localised the problem to a single syscall (faccessat) and the
+	# new syscall_hooks.conf already excludes it, the safer behaviour is
+	# to enable the fallback by default. Migrate only the unmodified
+	# defaults so users who had explicitly set 0 keep their choice.
+	#   "0" / "0\n" hashes from the v2.2.8 - v2.3.1 default file.
+	migrate_known_default \
+		"$ENABLE_SYSCALL_HOOKS_CONFIG" \
+		"$MOD_ENABLE_SYSCALL_HOOKS_CONFIG" \
+		"b6589fc6ab0dc82cf12099d1c2d40ab994e8410c,09d2af8dd22201dd8d48e5dcfcaed281ff9422c7"
 }
 
 add_target_path() {
@@ -954,6 +971,27 @@ if [ -f "$ENABLE_SYSCALL_HOOKS_CONFIG" ]; then
 	ENABLE_SYSCALL_HOOKS="$(head -n 1 "$ENABLE_SYSCALL_HOOKS_CONFIG" | tr -d '\r ')"
 fi
 
+# syscall_hooks.conf: comma-separated allowlist of __arm64_sys_*
+# probes to register. Tolerates either a single line of tokens
+# (comma-separated) or one token per line. Empty / missing means
+# "fall back to legacy behaviour (= ENABLE_SYSCALL_HOOKS as bool)".
+if [ -f "$SYSCALL_HOOKS_CONFIG" ]; then
+	SYSCALL_HOOKS=""
+	while IFS= read -r SYSCALL_HOOKS_LINE || [ -n "$SYSCALL_HOOKS_LINE" ]; do
+		SYSCALL_HOOKS_LINE="$(printf '%s' "$SYSCALL_HOOKS_LINE" | tr -d '\r ')"
+		case "$SYSCALL_HOOKS_LINE" in
+			''|\#*)
+				continue
+				;;
+		esac
+		if [ -z "$SYSCALL_HOOKS" ]; then
+			SYSCALL_HOOKS="$SYSCALL_HOOKS_LINE"
+		else
+			SYSCALL_HOOKS="$SYSCALL_HOOKS,$SYSCALL_HOOKS_LINE"
+		fi
+	done < "$SYSCALL_HOOKS_CONFIG"
+fi
+
 if [ -n "${PATHMASK_WAIT_SECONDS:-}" ]; then
 	WAIT_SECONDS="$PATHMASK_WAIT_SECONDS"
 fi
@@ -990,6 +1028,22 @@ case "$ENABLE_SYSCALL_HOOKS" in
 		ENABLE_SYSCALL_HOOKS=0
 		;;
 esac
+
+# Compose the final syscall_hooks string passed to insmod from the
+# two-layer model the WebUI exposes:
+#   - ENABLE_SYSCALL_HOOKS = master toggle (panel checkbox)
+#   - SYSCALL_HOOKS        = which 7 sub-probes the user picked
+# When the master toggle is off we explicitly send "none" so the
+# kernel doesn't fall through to the legacy enable_syscall_hooks
+# boolean (which would behave as "all 7" when set to 1 prior to
+# v2.4). When the master toggle is on but the per-probe list is
+# empty we keep "all" semantics for backward-compat with old configs
+# that only had the bool.
+if [ "$ENABLE_SYSCALL_HOOKS" = "0" ]; then
+	SYSCALL_HOOKS="none"
+elif [ -z "$SYSCALL_HOOKS" ]; then
+	SYSCALL_HOOKS="all"
+fi
 
 if [ -z "$TARGET_RAW_LINES" ]; then
 	log_e "empty target path list"
@@ -1039,9 +1093,9 @@ if grep -q '^nohello ' /proc/modules 2>/dev/null; then
 	exit 0
 fi
 
-if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS"; then
+if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS"; then
 	reset_load_failure_guard
-	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS"
+	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS syscall_hooks=$SYSCALL_HOOKS"
 	write_boot_state "loaded" "$TARGET_PATHS" ""
 else
 	log_e "failed to load $KO_PATH"

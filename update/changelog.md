@@ -1,3 +1,24 @@
+# PathMask 2.3.2
+
+## 解决了什么
+
+- syscall 兜底（7 个 `__arm64_sys_*` kretprobe）从一刀切的全开 / 全关，改成可逐个勾选。WebUI 在原来的 "syscall 兜底" 总开关下方新增折叠面板「选择具体 syscall（高级）」，对 newfstatat / statx / faccessat / faccessat2 / readlinkat / openat / openat2 各一个 checkbox。
+- **默认勾上 6 个，唯独不挂 `faccessat`**。这是上一版用户实测 bisect 的结论：Holmes "Abnormal Environment 04" 触发与否完全由是否 hook `__arm64_sys_faccessat` 决定，跟其他 6 个无关。最可能的解释是 Holmes 用 `access(path, F_OK)` 跑 timing fingerprint，而 bionic 在 flag=0 时刚好走 `faccessat` 而不是 `faccessat2`，access 又是这 7 个 syscall 里基线开销最低的，所以 trampoline 加的几百 ns 在百分比上最显眼。其他常规检测器（chunqiu 等）走的 stat / openat / readlink 路径全部仍被覆盖。
+- 旧的 `enable_syscall_hooks=0` 默认值（v2.2.8 - v2.3.1 那一版的 Holmes 04 缓解措施）不再适用，默认改为 `1`。配合默认 6-of-7 的 syscall 子集，对绝大多数检测器既能挡住又不触 Holmes。已经在 v2.2.8 - v2.3.1 装过的用户：如果他们没改过 `enable_syscall_hooks.conf`（文件内容仍是默认的 `0` / `0\n`），开机脚本会自动迁移到新默认；改过的用户保持现状不动。
+
+## 内核模块更新
+
+- 新增 `syscall_hooks=` 字符串参数（逗号分隔，可用 token：`newfstatat,statx,faccessat,faccessat2,readlinkat,openat,openat2,all,none`）。`syscall_hooks` 非空时覆盖旧的 `enable_syscall_hooks` 布尔值；空时仍按旧布尔值处理（向后兼容）。
+- 内核默认值（即没 insmod 参数时）是 `newfstatat,statx,faccessat2,readlinkat,openat,openat2`（6-of-7，不含 faccessat）。
+- dmesg 多了一行 `pathmask: skip __arm64_sys_xxx (disabled)` 用于显示哪些 syscall 主动跳过，方便确认配置生效。
+
+## WebUI 更新
+
+- "增强 syscall 兜底" 文案改为中性的"syscall 兜底"，旁边加一段说明解释 6-of-7 默认值。
+- 新增「选择具体 syscall（高级）」折叠面板，7 个 checkbox。`faccessat` 旁标"不推荐"，鼠标悬停说明 Holmes 04 触发条件。
+- 总开关关闭时，子面板里的 checkbox 自动 disabled 并整体半透明化，避免误以为它们还会生效。
+- "恢复默认配置" 按钮现在写入新的 6-of-7 默认值。
+
 # PathMask 2.3.1
 
 ## 解决了什么

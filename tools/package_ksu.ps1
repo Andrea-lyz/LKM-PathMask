@@ -24,6 +24,13 @@ param(
     [string]$HideDirents,
     [ValidateSet("0", "1")]
     [string]$EnableSyscallHooks,
+    # Comma-separated subset of __arm64_sys_* fallback probes to
+    # register: any combination of newfstatat,statx,faccessat,
+    # faccessat2,readlinkat,openat,openat2 (or 'all' / 'none').
+    # Empty string falls through to EnableSyscallHooks for
+    # backward compat. Detection via $PSBoundParameters means
+    # the caller can intentionally write an empty conf.
+    [string]$SyscallHooks,
     [ValidateSet("global", "deny")]
     [string]$ScopeMode,
     [string]$DenyPackage,
@@ -88,6 +95,9 @@ if ($PSBoundParameters.ContainsKey('HideDirents')) {
 if ($PSBoundParameters.ContainsKey('EnableSyscallHooks')) {
     Set-Content -LiteralPath (Join-Path $StageDir "enable_syscall_hooks.conf") -Value $EnableSyscallHooks -NoNewline -Encoding ASCII
 }
+if ($PSBoundParameters.ContainsKey('SyscallHooks')) {
+    Set-Content -LiteralPath (Join-Path $StageDir "syscall_hooks.conf") -Value $SyscallHooks -NoNewline -Encoding ASCII
+}
 if ($PSBoundParameters.ContainsKey('ScopeMode')) {
     Set-Content -LiteralPath (Join-Path $StageDir "scope_mode.conf") -Value $ScopeMode -NoNewline -Encoding ASCII
 }
@@ -147,6 +157,7 @@ foreach ($confName in @(
     "target_path.conf",
     "hide_dirents.conf",
     "enable_syscall_hooks.conf",
+    "syscall_hooks.conf",
     "scope_mode.conf",
     "deny_packages.conf",
     "deny_uids.conf",

@@ -625,3 +625,94 @@ button:active {
 .modalBody strong {
 	color: CanvasText;
 }
+
+.subPanel {
+	margin-top: 6px;
+	padding: 10px 12px;
+	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+	border-radius: 8px;
+	background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+}
+
+.subPanel summary {
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 600;
+	user-select: none;
+	list-style: none;
+}
+
+.subPanel summary::-webkit-details-marker {
+	display: none;
+}
+
+.subPanel summary::before {
+	content: "▸";
+	display: inline-block;
+	width: 14px;
+	margin-right: 4px;
+	color: color-mix(in srgb, CanvasText 50%, transparent);
+	transition: transform 120ms ease-in-out;
+}
+
+.subPanel[open] summary::before {
+	transform: rotate(90deg);
+}
+
+.subPanel.disabled {
+	opacity: 0.55;
+}
+
+.subPanel > .hint {
+	margin-top: 8px;
+}
+
+.syscallList {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 6px 12px;
+	margin-top: 10px;
+}
+
+@media (max-width: 480px) {
+	.syscallList {
+		grid-template-columns: 1fr;
+	}
+}
+
+.syscallRow {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 6px 8px;
+	border-radius: 6px;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.syscallRow:hover {
+	background: color-mix(in srgb, CanvasText 6%, transparent);
+}
+
+.syscallRow input {
+	margin-top: 2px;
+}
+
+.syscallRow > span {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+}
+
+.syscallRow small {
+	color: color-mix(in srgb, CanvasText 55%, transparent);
+	font-size: 11px;
+	line-height: 1.3;
+}
+
+.syscallRow em {
+	font-style: normal;
+	color: #c43;
+	font-size: 11px;
+	margin-left: 4px;
+}

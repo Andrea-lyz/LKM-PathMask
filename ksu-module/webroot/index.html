@@ -91,13 +91,28 @@
 				</label>
 				<label class="switchRow">
 					<span>
-						增强 syscall 兜底
+						syscall 兜底
 						<small class="hint">
-							加强少数极端场景下的路径隐藏效果，但会被多数环境检测识别为异常（如 Holmes、Hunter 等）。<strong>不推荐开启。</strong>
+							用 kretprobe 拦下 stat / access / readlink / openat 等 7 个 arm64 syscall 入口，绕开 ThinLTO 内联导致的 hook 漏触发。默认勾上 6 个，唯独不挂 <code>faccessat</code>（实测 Holmes "Abnormal Environment 04" 通过 <code>access(F_OK)</code> 时序识别这一个 syscall 的 trampoline 开销）。
 						</small>
 					</span>
 					<input id="enableSyscallHooksInput" type="checkbox">
 				</label>
+				<details id="syscallHooksDetails" class="subPanel">
+					<summary>选择具体 syscall（高级）</summary>
+					<small class="hint">
+						取消勾选某项即不挂对应的 kretprobe。<strong>不推荐勾选 <code>faccessat</code></strong>：会触发 Holmes 04，且大多数应用的 <code>access(path)</code> 在 flag=0 时走的是 <code>faccessat2</code>，<code>faccessat</code> 主要被 timing 探测器使用。
+					</small>
+					<div class="syscallList">
+						<label class="syscallRow"><input type="checkbox" data-syscall="newfstatat"><span>newfstatat<small>stat() / lstat()</small></span></label>
+						<label class="syscallRow"><input type="checkbox" data-syscall="statx"><span>statx<small>statx()</small></span></label>
+						<label class="syscallRow"><input type="checkbox" data-syscall="faccessat"><span>faccessat <em>不推荐</em><small>access(path), F_OK 时序探测面</small></span></label>
+						<label class="syscallRow"><input type="checkbox" data-syscall="faccessat2"><span>faccessat2<small>access(path, flag≠0)</small></span></label>
+						<label class="syscallRow"><input type="checkbox" data-syscall="readlinkat"><span>readlinkat<small>readlink()</small></span></label>
+						<label class="syscallRow"><input type="checkbox" data-syscall="openat"><span>openat<small>open() 主路径</small></span></label>
+						<label class="syscallRow"><input type="checkbox" data-syscall="openat2"><span>openat2<small>open() 新接口</small></span></label>
+					</div>
+				</details>
 			</section>
 
 			<section class="panel">
