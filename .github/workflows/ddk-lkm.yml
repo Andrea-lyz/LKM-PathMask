@@ -48,8 +48,15 @@ jobs:
         llvm-strip -d "/github/workspace/out/$OUTPUT_NAME"
         echo "Size after stripping: $(du -h "/github/workspace/out/$OUTPUT_NAME" | cut -f1)"
 
+        # procguard.ko only exists on branches that add it to kernel/Kbuild;
+        # keep this conditional so main builds (without procguard) still pass.
+        if [ -f procguard.ko ]; then
+          cp procguard.ko "/github/workspace/out/${{ inputs.kmi }}_procguard.ko"
+          llvm-strip -d "/github/workspace/out/${{ inputs.kmi }}_procguard.ko"
+        fi
+
     - name: Upload PathMask artifacts
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.kmi }}-pathmask
-        path: /github/workspace/out/${{ inputs.kmi }}_pathmask.ko
+        path: /github/workspace/out/*.ko
