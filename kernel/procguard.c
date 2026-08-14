@@ -28,7 +28,7 @@
  * isolated-UID caller asks about the configured target gid (3009 by
  * default). The procfs hidepid gate (has_pid_permissions() in
  * fs/proc/base.c) then falls back to ptrace_may_access(), which only allows
- * same-task access: the isolated process keeps /proc/self/* but sees
+ * same-task access: the isolated process keeps its own /proc/self entries but sees
  * nothing else. gid 3009 exists exclusively for the procfs readproc gate on
  * Android, so nothing legitimate is lost for these UIDs.
  *
