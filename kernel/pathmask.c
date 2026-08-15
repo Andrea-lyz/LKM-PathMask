@@ -151,7 +151,7 @@ enum pathmask_write_op_policy {
 static char write_op_policy[16] = "passthrough";
 module_param_string(write_op_policy, write_op_policy, sizeof(write_op_policy), 0644);
 MODULE_PARM_DESC(write_op_policy,
-	"write-class syscall policy on hidden targets: passthrough (default, native fs semantics), eacces (syscall-level absent-emulation), enoent (legacy blanket ENOENT)");
+	"write-class syscall policy on hidden targets: passthrough (default, native fs semantics), eacces (syscall-level absent-emulation incl. open(O_CREAT)), enoent (legacy blanket ENOENT)");
 
 static enum pathmask_write_op_policy active_write_policy = WRITE_OP_PASSTHROUGH;
 
@@ -683,6 +683,7 @@ static int getattr_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 struct syscall_match_data {
 	bool matched;
 	bool needs_close;
+	long err;
 };
 
 static atomic_t pm_syscall_seen = ATOMIC_INIT(0);
@@ -747,6 +748,7 @@ static int sys_path_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 
 	d->matched = false;
 	d->needs_close = false;
+	d->err = -ENOENT;
 
 	if (!sys_path_match_user_filename(regs))
 		return 0;
@@ -764,6 +766,7 @@ static int sys_openat_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 
 	d->matched = false;
 	d->needs_close = false;
+	d->err = -ENOENT;
 
 	/*
 	 * For openat we can only fake -ENOENT if we also have a way to
@@ -779,9 +782,58 @@ static int sys_openat_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 
 	d->matched = true;
 	d->needs_close = true;
+
+	/*
+	 * Under write_op_policy=eacces an open with O_CREAT must present
+	 * the absent profile (-EACCES, "create denied on a nonexistent
+	 * entry"): on FUSE+redaction storage -ENOENT here is exactly the
+	 * signature of an existing-but-hidden object. Plain opens keep
+	 * -ENOENT. Flags live in regs[2] for openat.
+	 */
+	if (active_write_policy == WRITE_OP_EACCES &&
+	    (((struct pt_regs *)regs->regs[0])->regs[2] & O_CREAT))
+		d->err = -EACCES;
+
 	if (atomic_cmpxchg(&pm_syscall_seen, 0, 1) == 0)
 		pr_info(PM_LOG_PREFIX
 			"syscall path hook fired (first time)\n");
+	return 0;
+}
+
+/*
+ * openat2 variant of the open hook: same semantics, but the flags are the
+ * first u64 of struct open_how pointed to by regs[2]. No first-fire log
+ * here; the shared pm_syscall_seen counter covers the family.
+ */
+static int sys_openat2_entry(struct kretprobe_instance *ri,
+			     struct pt_regs *regs)
+{
+	struct syscall_match_data *d = (struct syscall_match_data *)ri->data;
+	struct pt_regs *user_regs = (struct pt_regs *)regs->regs[0];
+
+	d->matched = false;
+	d->needs_close = false;
+	d->err = -ENOENT;
+
+	if (!pm_close_fd)
+		return 0;
+
+	if (!sys_path_match_user_filename(regs))
+		return 0;
+
+	d->matched = true;
+	d->needs_close = true;
+
+	if (active_write_policy == WRITE_OP_EACCES && user_regs) {
+		u64 how_flags = 0;
+
+		if (!copy_from_user(&how_flags,
+				    (const void __user *)user_regs->regs[2],
+				    sizeof(how_flags)) &&
+		    (how_flags & O_CREAT))
+			d->err = -EACCES;
+	}
+
 	return 0;
 }
 
@@ -802,7 +854,7 @@ static int sys_path_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 		pm_invoke_close_fd((unsigned int)ret);
 	}
 
-	regs_set_return_value(regs, -ENOENT);
+	regs_set_return_value(regs, d->err);
 	return 0;
 }
 
@@ -835,7 +887,7 @@ static struct pm_syscall_probe {
 	{ .symbol = "__arm64_sys_openat",     .short_name = "openat",
 	  .entry = sys_openat_entry },
 	{ .symbol = "__arm64_sys_openat2",    .short_name = "openat2",
-	  .entry = sys_openat_entry },
+	  .entry = sys_openat2_entry },
 };
 
 /*
