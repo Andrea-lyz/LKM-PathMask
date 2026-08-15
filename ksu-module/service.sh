@@ -27,6 +27,7 @@ MOD_ALLOW_SYSTEM_UIDS_CONFIG="$MODDIR/allow_system_uids.conf"
 MOD_WAIT_SECONDS_CONFIG="$MODDIR/wait_seconds.conf"
 MOD_ENABLE_SYSCALL_HOOKS_CONFIG="$MODDIR/enable_syscall_hooks.conf"
 MOD_SYSCALL_HOOKS_CONFIG="$MODDIR/syscall_hooks.conf"
+MOD_WRITE_OP_POLICY_CONFIG="$MODDIR/write_op_policy.conf"
 MOD_AUTO_SCENE_DEBUGFS_CONFIG="$MODDIR/auto_scene_debugfs.conf"
 MOD_PROC_GUARD_CONFIG="$MODDIR/procguard.conf"
 
@@ -41,6 +42,7 @@ ALLOW_SYSTEM_UIDS_CONFIG="$PERSIST_DIR/allow_system_uids.conf"
 WAIT_SECONDS_CONFIG="$PERSIST_DIR/wait_seconds.conf"
 ENABLE_SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/enable_syscall_hooks.conf"
 SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/syscall_hooks.conf"
+WRITE_OP_POLICY_CONFIG="$PERSIST_DIR/write_op_policy.conf"
 AUTO_SCENE_DEBUGFS_CONFIG="$PERSIST_DIR/auto_scene_debugfs.conf"
 PROC_GUARD_CONFIG="$PERSIST_DIR/procguard.conf"
 SCENE_DEBUGFS_PATHS_PATH="$PERSIST_DIR/scene_debugfs_paths"
@@ -57,6 +59,7 @@ DENY_UIDS=""
 WAIT_SECONDS=60
 ENABLE_SYSCALL_HOOKS=0
 SYSCALL_HOOKS=""
+WRITE_OP_POLICY=passthrough
 AUTO_SCENE_DEBUGFS=0
 SCENE_DEBUGFS_PATHS=""
 SCENE_DEBUGFS_COUNT=0
@@ -314,6 +317,7 @@ init_persistent_config() {
 		WAIT_SECONDS_CONFIG="$MOD_WAIT_SECONDS_CONFIG"
 		ENABLE_SYSCALL_HOOKS_CONFIG="$MOD_ENABLE_SYSCALL_HOOKS_CONFIG"
 		SYSCALL_HOOKS_CONFIG="$MOD_SYSCALL_HOOKS_CONFIG"
+		WRITE_OP_POLICY_CONFIG="$MOD_WRITE_OP_POLICY_CONFIG"
 		AUTO_SCENE_DEBUGFS_CONFIG="$MOD_AUTO_SCENE_DEBUGFS_CONFIG"
 		PROC_GUARD_CONFIG="$MOD_PROC_GUARD_CONFIG"
 		return
@@ -365,6 +369,7 @@ init_persistent_config() {
 	seed_config_file "$WAIT_SECONDS_CONFIG" "$MOD_WAIT_SECONDS_CONFIG" "60"
 	seed_config_file "$ENABLE_SYSCALL_HOOKS_CONFIG" "$MOD_ENABLE_SYSCALL_HOOKS_CONFIG" "1"
 	seed_config_file "$SYSCALL_HOOKS_CONFIG" "$MOD_SYSCALL_HOOKS_CONFIG" "newfstatat,statx,faccessat2,readlinkat,openat,openat2"
+	seed_config_file "$WRITE_OP_POLICY_CONFIG" "$MOD_WRITE_OP_POLICY_CONFIG" "passthrough"
 	seed_config_file "$AUTO_SCENE_DEBUGFS_CONFIG" "$MOD_AUTO_SCENE_DEBUGFS_CONFIG" "0"
 	seed_config_file "$PROC_GUARD_CONFIG" "$MOD_PROC_GUARD_CONFIG" "0"
 
@@ -1260,6 +1265,20 @@ if [ -f "$ENABLE_SYSCALL_HOOKS_CONFIG" ]; then
 	ENABLE_SYSCALL_HOOKS="$(head -n 1 "$ENABLE_SYSCALL_HOOKS_CONFIG" | tr -d '\r ')"
 fi
 
+# write_op_policy.conf: pathmask write-class syscall policy
+# (passthrough / eacces / enoent). Passed to insmod verbatim after
+# validation; unknown values fall back to passthrough.
+if [ -f "$WRITE_OP_POLICY_CONFIG" ]; then
+	WRITE_OP_POLICY="$(head -n 1 "$WRITE_OP_POLICY_CONFIG" | tr -d '\r ')"
+fi
+case "$WRITE_OP_POLICY" in
+	passthrough|eacces|enoent) ;;
+	*)
+		log_i "unsupported write_op_policy=$WRITE_OP_POLICY, fallback to passthrough"
+		WRITE_OP_POLICY=passthrough
+		;;
+esac
+
 # syscall_hooks.conf: comma-separated allowlist of __arm64_sys_*
 # probes to register. Tolerates either a single line of tokens
 # (comma-separated) or one token per line. Empty / missing means
@@ -1427,9 +1446,9 @@ if [ -f "$PROC_GUARD_KO_PATH" ] && [ "$(head -n 1 "$PROC_GUARD_CONFIG" 2>/dev/nu
 	fi
 fi
 
-if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS"; then
+if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS" write_op_policy="$WRITE_OP_POLICY"; then
 	reset_load_failure_guard
-	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS syscall_hooks=$SYSCALL_HOOKS"
+	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS syscall_hooks=$SYSCALL_HOOKS write_op_policy=$WRITE_OP_POLICY"
 	write_boot_state "loaded" "$TARGET_PATHS" ""
 	if [ "$AUTO_SCENE_DEBUGFS" = "1" ]; then
 		write_scene_debugfs_state "$SCENE_DEBUGFS_STATUS" "1" "discovered $SCENE_DEBUGFS_COUNT matching mount(s)"

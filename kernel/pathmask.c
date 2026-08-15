@@ -151,7 +151,7 @@ enum pathmask_write_op_policy {
 static char write_op_policy[16] = "passthrough";
 module_param_string(write_op_policy, write_op_policy, sizeof(write_op_policy), 0644);
 MODULE_PARM_DESC(write_op_policy,
-	"errno policy when a hidden target is hit mid write-class syscall: passthrough (default, native fs semantics), eacces, enoent (legacy)");
+	"write-class syscall policy on hidden targets: passthrough (default, native fs semantics), eacces (syscall-level absent-emulation), enoent (legacy blanket ENOENT)");
 
 static enum pathmask_write_op_policy active_write_policy = WRITE_OP_PASSTHROUGH;
 
@@ -986,6 +986,182 @@ static void unregister_syscall_hooks(void)
 	}
 }
 
+/*
+ * Write-class syscall hooks, active only with write_op_policy=eacces.
+ * The inode_permission level cannot shape mkdir/rename errno on FUSE+BPF
+ * storage: the ENOENT there is produced by Android's native package
+ * redaction during lookup and never passes through a permission check we
+ * can hook. The syscall entry stubs are the guaranteed interception point
+ * (same reasoning as the read-side fallback hooks above), so we rewrite
+ * the final errno to make a hidden-but-existing path present the exact
+ * profile of a genuinely absent one:
+ *
+ *   mkdirat / linkat / symlinkat / renameat(dst)  -> -EACCES
+ *   unlinkat / renameat(src)                      -> -ENOENT
+ */
+struct write_syscall_data {
+	bool matched;
+	long err;
+};
+
+static atomic_t pm_write_seen = ATOMIC_INIT(0);
+
+static bool sys_path_match_user_reg(struct pt_regs *regs, unsigned int regno)
+{
+	struct pt_regs *user_regs = (struct pt_regs *)regs->regs[0];
+	char buf[TARGET_TEXT_LEN];
+	long len;
+
+	if (!user_regs || !should_hide_for_current())
+		return false;
+
+	len = strncpy_from_user(buf,
+				(const char __user *)user_regs->regs[regno],
+				sizeof(buf));
+	if (len <= 0)
+		return false;
+	buf[sizeof(buf) - 1] = '\0';
+
+	return sys_path_matches_target(buf);
+}
+
+static void write_match_log_once(void)
+{
+	if (atomic_cmpxchg(&pm_write_seen, 0, 1) == 0)
+		pr_info(PM_LOG_PREFIX
+			"write-class syscall hook fired (first time)\n");
+}
+
+static int sys_mkdirat_entry(struct kretprobe_instance *ri,
+			     struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	d->matched = sys_path_match_user_reg(regs, 1);
+	d->err = -EACCES;
+	if (d->matched)
+		write_match_log_once();
+	return 0;
+}
+
+static int sys_unlinkat_entry(struct kretprobe_instance *ri,
+			      struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	d->matched = sys_path_match_user_reg(regs, 1);
+	d->err = -ENOENT;
+	if (d->matched)
+		write_match_log_once();
+	return 0;
+}
+
+/*
+ * renameat/renameat2/linkat carry two paths: oldpath in regs[1] and
+ * newpath in regs[3]. A hidden source means "absent" (-ENOENT); a hidden
+ * destination means "not writable" (-EACCES). Source wins when both hit.
+ */
+static int sys_two_path_entry(struct kretprobe_instance *ri,
+			      struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	d->matched = false;
+	d->err = 0;
+
+	if (sys_path_match_user_reg(regs, 1)) {
+		d->matched = true;
+		d->err = -ENOENT;
+	} else if (sys_path_match_user_reg(regs, 3)) {
+		d->matched = true;
+		d->err = -EACCES;
+	}
+
+	if (d->matched)
+		write_match_log_once();
+	return 0;
+}
+
+/*
+ * symlinkat(target, newdfd, linkpath): regs[1] is the symlink content
+ * string, not a lookup target; the path being created is regs[2].
+ */
+static int sys_symlinkat_entry(struct kretprobe_instance *ri,
+			       struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	d->matched = sys_path_match_user_reg(regs, 2);
+	d->err = -EACCES;
+	if (d->matched)
+		write_match_log_once();
+	return 0;
+}
+
+static int sys_write_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	if (d->matched)
+		regs_set_return_value(regs, d->err);
+	return 0;
+}
+
+static struct pm_write_probe {
+	const char *symbol;
+	pm_syscall_entry_t entry;
+	struct kretprobe rp;
+	bool registered;
+} pm_write_probes[] = {
+	{ .symbol = "__arm64_sys_mkdirat",   .entry = sys_mkdirat_entry },
+	{ .symbol = "__arm64_sys_unlinkat",  .entry = sys_unlinkat_entry },
+	{ .symbol = "__arm64_sys_renameat",  .entry = sys_two_path_entry },
+	{ .symbol = "__arm64_sys_renameat2", .entry = sys_two_path_entry },
+	{ .symbol = "__arm64_sys_linkat",    .entry = sys_two_path_entry },
+	{ .symbol = "__arm64_sys_symlinkat", .entry = sys_symlinkat_entry },
+};
+
+static void register_write_hooks(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pm_write_probes); i++) {
+		struct pm_write_probe *p = &pm_write_probes[i];
+		int ret;
+
+		p->rp.kp.symbol_name = p->symbol;
+		p->rp.entry_handler = p->entry;
+		p->rp.handler = sys_write_exit;
+		p->rp.data_size = sizeof(struct write_syscall_data);
+		p->rp.maxactive = 40;
+
+		ret = register_kretprobe(&p->rp);
+		if (ret) {
+			pr_warn(PM_LOG_PREFIX
+				"register_kretprobe(%s) failed: %d (skip)\n",
+				p->symbol, ret);
+			continue;
+		}
+		p->registered = true;
+		pr_info(PM_LOG_PREFIX "hooked %s (write-class)\n",
+			p->symbol);
+	}
+}
+
+static void unregister_write_hooks(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pm_write_probes); i++) {
+		struct pm_write_probe *p = &pm_write_probes[i];
+
+		if (p->registered) {
+			unregister_kretprobe(&p->rp);
+			p->registered = false;
+		}
+	}
+}
+
 #define GETDENTS_BUF_LIMIT 65536u
 
 static struct kretprobe kp_getdents;
@@ -1162,7 +1338,14 @@ static int __init pathmask_init(void)
 		unsigned int wanted = parse_syscall_hooks();
 
 		if (wanted) {
-			register_syscall_hooks();
+	register_syscall_hooks();
+
+	if (active_write_policy == WRITE_OP_EACCES)
+		register_write_hooks();
+	else
+		pr_info(PM_LOG_PREFIX
+			"write-class syscall hooks disabled (write_op_policy=%s)\n",
+			write_op_policy);
 			pr_info(PM_LOG_PREFIX
 				"syscall fallback: %u of %u probe(s) requested\n",
 				wanted,
@@ -1206,6 +1389,7 @@ static void __exit pathmask_exit(void)
 	unregister_kretprobe(&kp_inode_perm);
 	unregister_kretprobe(&kp_inode_getattr);
 	unregister_syscall_hooks();
+	unregister_write_hooks();
 	if (getdents_registered) {
 		unregister_kretprobe(&kp_getdents);
 		getdents_registered = false;
