@@ -250,10 +250,17 @@ edits these files for you, but they can also be inspected manually:
 - `/data/adb/pathmask/wait_seconds.conf`: total budget the boot service spends
   waiting for configured target paths to appear and (in `deny` / `allow` mode)
   for package names to resolve to UIDs. Default 60 seconds. Both phases share the
-  same deadline, so the worst-case boot delay is bounded by this value, not by
+   same deadline, so the worst-case boot delay is bounded by this value, not by
   twice it. The boot service writes its current phase to
   `/data/adb/pathmask/boot_state` so the WebUI can show whether the module is
   still waiting or has decided to skip loading.
+- `/data/adb/pathmask/write_op_policy.conf`: write-op errno policy for hidden
+  targets. `passthrough` (default) leaves write syscalls untouched so the
+  native filesystem returns stock errnos; `eacces` makes write probes see the
+  exact profile of a genuinely absent path (mkdir/Create etc. EACCES,
+  unlink/rename source ENOENT) to block existence inference; `enoent` keeps
+  the legacy blanket ENOENT. Switched from the WebUI Protection tab, which
+  persists the value and hot-reloads.
 - `/data/adb/pathmask/procguard.conf`: isolation-protection switch. Default
   `0`. `1` loads the companion `procguard.ko` at boot; the WebUI Protection
   tab writes this file and applies the change immediately.

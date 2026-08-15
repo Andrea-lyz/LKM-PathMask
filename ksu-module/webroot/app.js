@@ -103,6 +103,7 @@ const files = {
 	ko: `${MODDIR}/pathmask.ko`,
 	procguardKo: `${MODDIR}/procguard.ko`,
 	procguardConf: `${CONFIGDIR}/procguard.conf`,
+	writeOpPolicy: `${CONFIGDIR}/write_op_policy.conf`,
 };
 
 let apps = [];
@@ -1335,6 +1336,7 @@ true
 		dmesgState,
 		dmesgSummary,
 		sysfsParams,
+		writePolicyText: snapshot.writePolicyText || "",
 		sysResolvedCount,
 		confTargetCount: confTargets.length,
 		confSyscallHooks,
@@ -1677,6 +1679,20 @@ function buildKeyFacts(facts) {
 			"路径解析",
 			resolved >= configured ? FACT_OK : FACT_WARN,
 			`内核解析 ${resolved} / 配置 ${configured}${note}`,
+		));
+	}
+
+	// write_op_policy: the running value is the insmod-time sysfs param,
+	// the conf value is the persistent file; mismatch means the user
+	// switched the policy but has not hot-reloaded yet.
+	const writePolicyRunning = ((facts.sysfsParams || {}).write_op_policy || "").trim();
+	if (facts.moduleLoaded && writePolicyRunning) {
+		const confWritePolicy = (firstLine(facts.writePolicyText || "") || "passthrough").trim();
+		const writePolicyStale = confWritePolicy !== writePolicyRunning;
+		lines.push(fmtFactRow(
+			"写入伪装策略",
+			writePolicyStale ? FACT_WARN : FACT_OK,
+			`${writePolicyRunning}${writePolicyStale ? `（配置为 ${confWritePolicy}，未热重载）` : ""}`,
 		));
 	}
 
@@ -2078,6 +2094,7 @@ async function refreshConfig() {
 	const sysDenyUids = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/deny_uids ] && cat /sys/module/${MODULE_NAME}/parameters/deny_uids || true`);
 	const sysResolvedCount = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/resolved_count ] && cat /sys/module/${MODULE_NAME}/parameters/resolved_count || true`);
 	const procguardConfText = await readFile(files.procguardConf);
+	const writePolicyText = await readFile(files.writeOpPolicy);
 	const procguardModuleText = await safeExec(`grep '^${PROCGUARD_MODULE_NAME} ' /proc/modules || true`);
 	const procguardKoInfo = await safeExec(`[ -f ${shellQuote(files.procguardKo)} ] && echo present || echo missing`);
 	const procguardHits = await safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/blocked_hits ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/blocked_hits || true`);
@@ -2099,6 +2116,10 @@ async function refreshConfig() {
 	const scope = normalizeScope(scopeText.trim() || "deny");
 	const scopeInput = document.querySelector(`input[name="scope"][value="${scope}"]`);
 	if (scopeInput) scopeInput.checked = true;
+	const writePolicyRaw = (writePolicyText || "").trim() || "passthrough";
+	const writePolicy = ["passthrough", "eacces", "enoent"].includes(writePolicyRaw) ? writePolicyRaw : "passthrough";
+	const writePolicyInput = document.querySelector(`input[name="writePolicy"][value="${writePolicy}"]`);
+	if (writePolicyInput) writePolicyInput.checked = true;
 	applyAllowSystemUidsToCheckboxes(allowSystemUidText);
 	updateAllowSystemUidsState(scope);
 	const denyPackageLines = linesFromText(denyPkgText);
@@ -2150,6 +2171,7 @@ async function refreshConfig() {
 		procguardHits,
 		procguardMissed,
 		procguardGid,
+		writePolicyText,
 		koInfo,
 		moduleFlags,
 		legacyConfigInfo,
@@ -2601,6 +2623,28 @@ async function saveConfig() {
 	showToast("已保存，重启后生效");
 }
 
+const WRITE_POLICY_LABELS = {
+	passthrough: "跟随原厂",
+	eacces: "伪装不存在",
+	enoent: "旧版行为",
+};
+
+// write_op_policy is an insmod parameter fed by service.sh from the
+// persistent conf, so switching it requires a full module reload. The
+// reload command below is intentionally kept in sync with reloadModule.
+async function applyWritePolicy() {
+	const checked = document.querySelector('input[name="writePolicy"]:checked');
+	const value = checked ? checked.value : "passthrough";
+	await writeLines(files.writeOpPolicy, [value]);
+	statusText.textContent = "正在应用写入伪装策略...";
+	const output = await execShell(
+		`if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
+	);
+	setLogContent("kernel", output);
+	await refreshDiagnostics();
+	showToast(`写入伪装已切换为「${WRITE_POLICY_LABELS[value] || value}」`);
+}
+
 async function reloadModule() {
 	await validateConfig({ throwOnError: true, requireModuleFile: true });
 	const scope = currentScope();
@@ -2977,6 +3021,9 @@ $("#procguardEnableInput").addEventListener("change", () => {
 	const enable = $("#procguardEnableInput").checked;
 	runAction(enable ? "正在启用隔离防护..." : "正在停用隔离防护...", () => setProcguardEnabled(enable)).catch(() => refreshConfig());
 });
+for (const radio of $$('input[name="writePolicy"]')) {
+	radio.addEventListener("change", () => runAction("正在应用写入伪装策略...", applyWritePolicy).catch(() => refreshConfig()));
+}
 $("#autoSceneDebugfsInput").addEventListener("change", () => {
 	const enabled = $("#autoSceneDebugfsInput").checked;
 	const node = $("#autoSceneDebugfsStatus");
