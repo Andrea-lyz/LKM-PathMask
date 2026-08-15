@@ -194,6 +194,15 @@
 				</label>
 				<p id="procguardStats" class="hint">正在读取状态…</p>
 			</section>
+
+			<section class="panel">
+				<div class="sectionTitle">
+					<h2>预期与排查</h2>
+				</div>
+				<p class="hint">启用后，隔离进程将失去遍历 <code>/proc</code> 的能力（gid 3009 在内核层被摘除）。用 Privisolated 之类的检测 demo 验证时：</p>
+				<p class="hint"><strong>OK: Not found / INFO: vulnerability fixed</strong>——第一层泄漏已封堵，防护生效。</p>
+				<p class="hint"><strong>仍然 WARN，且内容是本机挂载路径</strong>——这超出了本模块的范围：说明隔离进程<em>自己的</em> mountinfo 里就能看到模块挂载（第二层问题）。procguard 只负责摘除 gid 3009，不改变挂载可见性；此时应排查其他涉及挂载的模块采用了什么挂载方式，以及 root 方案对隔离进程挂载命名空间的隐藏是否到位。</p>
+			</section>
 		</section>
 
 		<section id="diagnosisPanel" class="tabPanel">
