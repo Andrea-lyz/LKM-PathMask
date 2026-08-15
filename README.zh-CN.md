@@ -66,10 +66,11 @@ cat /sys/module/pathmask/parameters/deny_uids
 
 KernelSU 管理器里进入 PathMask 的 WebUI。
 
-页面分为四个页：
+页面分为五个页：
 
 ```text
-配置：修改隐藏路径、作用范围 App、UID、模式
+遮罩：修改隐藏路径、作用范围 App、UID、模式
+防护：启停隔离防护（procguard）
 诊断：自动检查常见问题
 日志：分页查看脚本日志、内核日志、配置和状态
 报告：复制完整诊断报告
@@ -82,6 +83,14 @@ KernelSU 管理器里进入 PathMask 的 WebUI。
 ```
 
 把完整报告发出来，比截图靠谱。
+
+## 防护页是什么
+
+`防护` 是 2.6.0 新增的隔离防护。Android 的隔离进程（`android:isolatedProcess` 声明的服务）会从 zygote 继承 gid 3009（AID_READPROC），可以绕过 hidepid 遍历全部 `/proc`，读取任意进程的 mountinfo / cmdline / maps，借此发现模块挂载——这就是 LSPosed Privisolated 披露的漏洞。打开开关后，伴生内核模块 procguard.ko 会在内核对隔离 UID（90000-99999）摘掉这个 gid，隔离进程之后只能看到自己的 `/proc/self`，进程遍历消失。
+
+默认停用；启用即时生效（会同时热重载 pathmask 和 procguard），停用只卸载 procguard，不影响 pathmask。
+
+注意它只封堵"进程遍历"这一层泄漏。如果启用后检测 demo 仍然 WARN 出本机挂载路径，那是第二层问题：隔离进程自己的 mountinfo 里就有模块挂载，需要自行排查其他涉及挂载的模块采用了什么挂载方式，以及 root 方案对隔离进程挂载命名空间的隐藏是否到位。详见页内的"预期与排查"卡片。
 
 ## 默认隐藏什么
 
@@ -266,6 +275,10 @@ Scene debugfs 自动识别开关，默认 `0`（关闭）。开启后，启动�
 `/data/adb/pathmask/wait_seconds.conf`
 
 开机时等待隐藏路径出现、以及 deny / allow 模式下等待包名解析为 UID 的总秒数预算。默认 60。两个等待阶段共用同一个截止时间，所以最坏情况下只会延迟这么多，而不是这一项的两倍。路径或包名出现得慢的设备可以调大；也可以在 WebUI 的「开机等待秒数」里直接改。
+
+`/data/adb/pathmask/procguard.conf`
+
+隔离防护开关，默认 `0`（停用）。填 `1` 时开机脚本会加载伴生模块 procguard.ko；在 WebUI「防护」页切换开关就是写这个文件，即时生效，不需要等重启。
 
 `/data/adb/pathmask/boot_state`
 

@@ -1,3 +1,21 @@
+# PathMask 2.6.0
+
+## 解决了什么
+
+- **新增 procguard 隔离防护，封堵 LSPosed Privisolated 披露的 /proc 遍历漏洞**。Android 隔离进程（主 zygote 直接 fork 的 `android:isolatedProcess="true"` 服务）会从 zygote 继承 gid 3009（AID_READPROC），得以绕过 `hidepid=2` 遍历全部 `/proc/<pid>`，读取任意进程的 mountinfo / cmdline / maps，借此发现 Magisk/KSU 模块挂载。该特权自隔离进程诞生起存在十年，2026-08 由 LSPosed 公开，且已观察到加固壳在野利用。新增伴生内核模块 `procguard.ko`：kretprobe 挂在 `in_group_p()`，隔离 UID（90000-99999，含 App Zygote 段）查询 gid 3009 时强制返回"不在组"，procfs hidepid 重新生效；`/proc/self` 读取不受影响，其余 gid 一概不碰。WebView / Chrome 渲染进程走 child zygote，AOSP 早已清空其 groups，不受本改动影响。
+- **防护默认停用，WebUI 一键启停**。「防护」页提供开关，状态持久化到 `procguard.conf`，开机脚本按它加载；启用即时生效（同时热重载 pathmask 与 procguard），停用只卸载 procguard，pathmask 继续运行。热重载语义联动：防护启用时热重载两个模块一起重载，停用时只重载 pathmask；「暂停隐藏」只暂停 pathmask，防护层保持生效。
+- **WebUI 页签改版**：原「配置」改名「遮罩」，新增「防护」页，五个页签统一两字布局（遮罩/防护/诊断/日志/报告），5 列网格在窄屏不溢出。防护页显示运行统计（blocked_hits / missed / target_gid），并附「预期与排查」卡片：明确本模块只封堵第一层泄漏（进程遍历），若启用后检测 demo 仍 WARN 出本机挂载路径，属第二层问题（隔离进程自己的 mountinfo 脏），需自行排查其他涉及挂载的模块采用的挂载方式，以及 root 方案对隔离进程挂载命名空间的隐藏是否到位。
+- **诊断 / 日志 / 报告接入 procguard**。健康列表提供防护生效、已启用未加载、ko 缺失、已停用四态提示；诊断采集把 procguard 纳入 `/proc/modules` 检查并转储其 sysfs 参数；probe、热重载、暂停的 dmesg 过滤全部加入 `procguard`；报告新增 procguard 段（ko 存在性、开关状态、加载状态、拦截统计）。
+- **修复报告跨重载周期重复**。dmesg 保留开机以来每个加载周期的日志，热重载会让「已实战触发」结论与 hooked / target 列表重复多份；`summarizeDmesg` 现按首次出现顺序去重。
+- **修复路径解析措辞**。内核解析数大于配置数（Scene 自动识别补充了运行时路径）时不再误报「部分路径被 skip」，改为正常状态并注明「含 N 条运行时自动识别路径」。
+
+## 其他变化
+
+- `package_ksu.ps1` 新增 `-ProcguardKoPath` 参数；DDK CI artifact 在 pathmask.ko 之外同步产出对应 KMI 的 procguard.ko。
+- 卸载脚本在模块移除时一并卸载 procguard。
+- 报告「其他 LKM」一行不再把本模块自带的 procguard 算进去。
+- 内核：新增 procguard.ko；pathmask.ko 本体无变化。
+
 # PathMask 2.5.0
 
 - **新增 Scene debugfs 自动识别**。WebUI 提供默认关闭的开关；开启后会动态识别 `/dev` 下文件系统类型为 `debugfs`、SELinux 上下文为 `u:object_r:debugfs:s0` 的 Scene 随机挂载点，并作为本次运行的隐藏路径加入，无需手动追踪每次开机变化的目录名。
