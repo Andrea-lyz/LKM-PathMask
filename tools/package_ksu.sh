@@ -95,6 +95,38 @@ mkdir -p "$STAGE_DIR" "$(dirname -- "$OUTPUT")"
 cp -R "$TEMPLATE_DIR"/. "$STAGE_DIR"/
 cp "$KO_PATH" "$STAGE_DIR/pathmask.ko"
 
+# Optional procguard companion ko (isolated-process gid-3009 strip).
+# Explicit PROCGUARD_KO wins; otherwise auto-detect a sibling of the
+# pathmask ko ("<base>_procguard.ko" or plain "procguard.ko"). Skipped
+# silently when absent -- service.sh tolerates a missing procguard.ko
+# and the WebUI Protection tab then reports it as unavailable.
+if [ -z "${PROCGUARD_KO:-}" ]; then
+	KO_DIR=$(dirname -- "$KO_PATH")
+	KO_BASE=$(basename "$KO_PATH" .ko)
+	case "$KO_BASE" in
+		*_pathmask)
+			CANDIDATE="$KO_DIR/${KO_BASE%_pathmask}_procguard.ko"
+			;;
+		*)
+			CANDIDATE="$KO_DIR/procguard.ko"
+			;;
+	esac
+	if [ -f "$CANDIDATE" ]; then
+		PROCGUARD_KO="$CANDIDATE"
+	fi
+fi
+if [ -n "${PROCGUARD_KO:-}" ]; then
+	case "$PROCGUARD_KO" in
+	/*) ;;
+	*) PROCGUARD_KO="$REPO_ROOT/$PROCGUARD_KO" ;;
+	esac
+	if [ ! -f "$PROCGUARD_KO" ]; then
+		echo "Missing procguard kernel module: $PROCGUARD_KO" >&2
+		exit 1
+	fi
+	cp "$PROCGUARD_KO" "$STAGE_DIR/procguard.ko"
+fi
+
 if [ -n "$UPDATE_JSON_URL" ]; then
 	grep -v '^updateJson=' "$STAGE_DIR/module.prop" > "$STAGE_DIR/module.prop.tmp" || true
 	mv "$STAGE_DIR/module.prop.tmp" "$STAGE_DIR/module.prop"

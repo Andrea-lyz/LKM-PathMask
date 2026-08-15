@@ -72,6 +72,7 @@ jobs:
         run: |
           mkdir -p release-upload
           find release-assets -type f -name '*_pathmask.ko' -exec cp {} release-upload/ \;
+          find release-assets -type f -name '*_procguard.ko' -exec cp {} release-upload/ \;
 
           found_ko=0
           for ko in release-upload/*_pathmask.ko; do

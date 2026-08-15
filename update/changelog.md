@@ -1,3 +1,8 @@
+# PathMask 2.6.1
+
+- **修复发布包缺失 procguard.ko**。CI 发布链路走 POSIX 版 `tools/package_ksu.sh`,上一版只拷贝了 pathmask.ko,导致 v2.6.0 的 zip 不含 procguard.ko(WebUI 防护页显示"当前模块包未包含 procguard.ko,防护不可用")。`package_ksu.sh` 现在会自动发现并打包 pathmask ko 同目录的 procguard.ko(`<base>_procguard.ko` 或 `procguard.ko`),CI 资产准备步骤同步收集 `*_procguard.ko`。
+- 内核模块、WebUI、配置均无变化;已更新到 v2.6.0 的设备会再次收到本次修复的更新推送。
+
 # PathMask 2.6.0
 
 ## 解决了什么
