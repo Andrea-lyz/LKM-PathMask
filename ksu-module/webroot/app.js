@@ -990,6 +990,12 @@ function summarizeDmesg(text) {
 		notFoundLines: [],     // ["pathmask: /dev/foo not found (err=-2), skip"]
 		errorLines: [],        // disagrees, unknown symbol, etc
 	};
+	// dmesg keeps every load cycle since boot (each hot reload appends
+	// its own hooked/fired/target lines), so the same line repeats per
+	// cycle. Dedupe while preserving first-seen order for display.
+	const pushUnique = (arr, value) => {
+		if (!arr.includes(value)) arr.push(value);
+	};
 	for (const raw of lines) {
 		const line = raw.trim();
 		if (!line) continue;
@@ -997,17 +1003,17 @@ function summarizeDmesg(text) {
 		const clean = line.replace(/^\s*\[\s*\d+\.\d+\]\s*/, "");
 		let m;
 		if ((m = clean.match(/^pathmask:\s+hooked\s+(\S+)/))) {
-			sum.hookedSymbols.push(m[1]);
+			pushUnique(sum.hookedSymbols, m[1]);
 		} else if ((m = clean.match(/^pathmask:\s+skip\s+(\S+)\s+\(disabled\)/))) {
-			sum.skippedSymbols.push(m[1]);
+			pushUnique(sum.skippedSymbols, m[1]);
 		} else if ((m = clean.match(/^pathmask:\s+(\w+(?:\s+\w+)?)\s+hook fired \(first time\)/))) {
-			sum.hookFiredFirstTime.push(m[1]);
+			pushUnique(sum.hookFiredFirstTime, m[1]);
 		} else if (clean.startsWith("pathmask: loaded -- ")) {
 			sum.loadedLine = clean.replace(/^pathmask:\s+/, "");
 		} else if ((m = clean.match(/^pathmask:\s+target\[\d+\]\s+(.+)/))) {
-			sum.targetLines.push(m[1]);
+			pushUnique(sum.targetLines, m[1]);
 		} else if (/pathmask:.*not found|skip/.test(clean) && clean.includes("err=")) {
-			sum.notFoundLines.push(clean.replace(/^pathmask:\s+/, ""));
+			pushUnique(sum.notFoundLines, clean.replace(/^pathmask:\s+/, ""));
 		} else if (/disagrees about version of symbol|Unknown symbol|invalid module format|exec format error|module_layout/i.test(clean)) {
 			sum.errorLines.push(clean);
 		}
@@ -1163,7 +1169,7 @@ true
 	const otherLkms = allModules
 		.split(/\r?\n/)
 		.map((l) => l.split(" ")[0])
-		.filter((n) => n && n !== "pathmask" && n !== "nohello");
+		.filter((n) => n && n !== "pathmask" && n !== "procguard" && n !== "nohello");
 
 	const dmesgRaw = ok(dmesgRes);
 	const dmesgRestrict = ok(dmesgRestrictRes);
@@ -1657,11 +1663,20 @@ function buildKeyFacts(facts) {
 	// Only emit when the module is loaded; if it isn't, sysfs is
 	// stale or empty so the comparison is meaningless.
 	if (facts.moduleLoaded && facts.confTargetCount > 0 && facts.sysResolvedCount >= 0) {
-		const matched = facts.sysResolvedCount === facts.confTargetCount;
+		const resolved = facts.sysResolvedCount;
+		const configured = facts.confTargetCount;
+		// resolved > configured happens when Scene auto-discovery adds
+		// runtime paths on top of the configured list -- that is a
+		// success, not a "skipped targets" warning.
+		const note = resolved === configured
+			? ""
+			: resolved > configured
+				? `（含 ${resolved - configured} 条运行时自动识别路径）`
+				: "（部分路径加载时不存在被 skip）";
 		lines.push(fmtFactRow(
 			"路径解析",
-			matched ? FACT_OK : FACT_WARN,
-			`内核解析 ${facts.sysResolvedCount} / 配置 ${facts.confTargetCount}${matched ? "" : "（部分路径加载时不存在被 skip）"}`,
+			resolved >= configured ? FACT_OK : FACT_WARN,
+			`内核解析 ${resolved} / 配置 ${configured}${note}`,
 		));
 	}
 
