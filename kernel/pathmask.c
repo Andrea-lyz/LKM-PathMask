@@ -23,6 +23,8 @@
 #include <linux/string.h>
 #include <linux/uidgid.h>
 #include <linux/uaccess.h>
+#include <asm/syscall.h>
+#include <asm/unistd.h>
 
 #define PM_LOG_PREFIX "pathmask: "
 #define MAX_HIDE_TARGETS 64
@@ -139,6 +141,19 @@ MODULE_PARM_DESC(syscall_hooks,
 static char scope_mode[16] = "global";
 module_param_string(scope_mode, scope_mode, sizeof(scope_mode), 0644);
 MODULE_PARM_DESC(scope_mode, "Hide scope: global, deny, or allow");
+
+enum pathmask_write_op_policy {
+	WRITE_OP_PASSTHROUGH = 0,
+	WRITE_OP_EACCES,
+	WRITE_OP_ENOENT,
+};
+
+static char write_op_policy[16] = "passthrough";
+module_param_string(write_op_policy, write_op_policy, sizeof(write_op_policy), 0644);
+MODULE_PARM_DESC(write_op_policy,
+	"errno policy when a hidden target is hit mid write-class syscall: passthrough (default, native fs semantics), eacces, enoent (legacy)");
+
+static enum pathmask_write_op_policy active_write_policy = WRITE_OP_PASSTHROUGH;
 
 static char deny_uids[UID_LIST_LEN];
 module_param_string(deny_uids, deny_uids, sizeof(deny_uids), 0644);
@@ -366,6 +381,28 @@ static int parse_scope_mode(void)
 	return -EINVAL;
 }
 
+static int parse_write_op_policy(void)
+{
+	if (!strcmp(write_op_policy, "passthrough")) {
+		active_write_policy = WRITE_OP_PASSTHROUGH;
+		return 0;
+	}
+
+	if (!strcmp(write_op_policy, "eacces")) {
+		active_write_policy = WRITE_OP_EACCES;
+		return 0;
+	}
+
+	if (!strcmp(write_op_policy, "enoent")) {
+		active_write_policy = WRITE_OP_ENOENT;
+		return 0;
+	}
+
+	pr_err(PM_LOG_PREFIX "unsupported write_op_policy=%s\n",
+	       write_op_policy);
+	return -EINVAL;
+}
+
 static int add_deny_uid(uid_t uid)
 {
 	if (deny_uid_count >= MAX_DENY_UIDS) {
@@ -516,6 +553,59 @@ struct inode_perm_data {
 #define PM_PERM_INODE_REG 0
 #endif
 
+/*
+ * errno policy for write-class syscalls. inode_permission/vfs_getattr are
+ * consulted mid-operation by filesystems (FUSE+BPF does this during
+ * mkdir/rename via lookup_one_qstr_excl-style flows), so a blanket -ENOENT
+ * override leaks through as the syscall errno: mkdir on a hidden but
+ * existing directory reports ENOENT where stock returns EACCES/EEXIST --
+ * a deterministic fingerprint. passthrough (default) leaves the return
+ * value untouched so the native fs/FUSE policy produces the stock errno;
+ * parents of hidden targets are virtually never writable by the probing
+ * app, so the native result is the stock one.
+ *
+ * arm64 only ships the *at variants (no mkdir/rename/link/symlink/rmdir
+ * numbers). Kernel threads have no user pt_regs frame; treat them as
+ * non-write-class so they keep the legacy behaviour.
+ */
+static inline bool pm_is_write_class_syscall(void)
+{
+	int nr;
+
+	if (current->flags & PF_KTHREAD)
+		return false;
+
+	nr = syscall_get_nr(current, task_pt_regs(current));
+	switch (nr) {
+	case __NR_mkdirat:
+	case __NR_renameat:
+	case __NR_renameat2:
+	case __NR_linkat:
+	case __NR_symlinkat:
+	case __NR_unlinkat:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static inline void pm_apply_hide_errno(struct pt_regs *regs)
+{
+	if (pm_is_write_class_syscall()) {
+		switch (active_write_policy) {
+		case WRITE_OP_PASSTHROUGH:
+			return;
+		case WRITE_OP_EACCES:
+			regs_set_return_value(regs, -EACCES);
+			return;
+		case WRITE_OP_ENOENT:
+			break;
+		}
+	}
+
+	regs_set_return_value(regs, -ENOENT);
+}
+
 static int perm_inode_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	struct inode_perm_data *d = (struct inode_perm_data *)ri->data;
@@ -533,7 +623,7 @@ static int perm_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 	struct inode_perm_data *d = (struct inode_perm_data *)ri->data;
 
 	if (d->matched)
-		regs_set_return_value(regs, -ENOENT);
+		pm_apply_hide_errno(regs);
 	return 0;
 }
 
@@ -567,7 +657,7 @@ static int getattr_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 	struct inode_perm_data *d = (struct inode_perm_data *)ri->data;
 
 	if (d->matched)
-		regs_set_return_value(regs, -ENOENT);
+		pm_apply_hide_errno(regs);
 	return 0;
 }
 
@@ -1018,6 +1108,10 @@ static int __init pathmask_init(void)
 	if (ret)
 		return ret;
 
+	ret = parse_write_op_policy();
+	if (ret)
+		return ret;
+
 	ret = parse_deny_uids();
 	if (ret)
 		return ret;
@@ -1101,9 +1195,9 @@ static int __init pathmask_init(void)
 	}
 
 	pr_info(PM_LOG_PREFIX
-		"loaded -- %u target(s) hidden, scope=%s, scope_uid_count=%u hide_isolated=%d enable_syscall_hooks=%d syscall_hooks=\"%s\"\n",
+		"loaded -- %u target(s) hidden, scope=%s, scope_uid_count=%u hide_isolated=%d enable_syscall_hooks=%d syscall_hooks=\"%s\" write_op_policy=%s\n",
 		target_count, scope_mode, deny_uid_count, hide_isolated,
-		enable_syscall_hooks, syscall_hooks);
+		enable_syscall_hooks, syscall_hooks, write_op_policy);
 	return 0;
 }
 
