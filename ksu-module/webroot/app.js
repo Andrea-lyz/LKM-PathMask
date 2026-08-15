@@ -724,6 +724,19 @@ function updateHealthList() {
 		items.push({ level: "ok", title: "模块文件存在", body: `${files.ko}` });
 	}
 
+	const pgKoPresent = (snapshot.procguardKoInfo || "").trim() === "present";
+	const pgLoaded = !!(snapshot.procguardModuleText || "").trim();
+	const pgEnabled = parseBoolish(snapshot.procguardConfText, false);
+	if (!pgKoPresent && pgEnabled) {
+		items.push({ level: "warn", title: "procguard.ko 缺失", body: "procguard.conf 为启用但模块包里没有 procguard.ko，隔离防护不可用。" });
+	} else if (pgLoaded) {
+		items.push({ level: "ok", title: "隔离防护生效中", body: `procguard 已加载，已拦截 ${(snapshot.procguardHits || "").trim() || "0"} 次 readproc 查询。` });
+	} else if (pgEnabled) {
+		items.push({ level: "warn", title: "隔离防护已启用但未加载", body: "在「防护」页重新切换一次开关，或点「保存并热重载」。" });
+	} else {
+		items.push({ level: "ok", title: "隔离防护已停用", body: "隔离进程仍可遍历 /proc；需要时到「防护」页启用。" });
+	}
+
 	if ((scope === "deny" || scope === "allow") && selected.length === 0 && directUids.length === 0 && allowSystemUids.length === 0 && sysUids.length === 0) {
 		const listName = scope === "allow" ? "白名单" : "黑名单";
 		items.push({ level: "bad", title: `${listName}为空`, body: `${scope} 模式下没有包名或 UID，service.sh 会跳过加载。` });
@@ -1140,7 +1153,7 @@ true
 		probeExec(`[ -f ${shellQuote(files.ko)} ] && sha1sum ${shellQuote(files.ko)} 2>&1 | awk '{print $1}' || echo missing`),
 		probeExec(`[ -f ${shellQuote(files.ko)} ] && stat -c '%s' ${shellQuote(files.ko)} 2>&1 || echo missing`),
 		probeExec(`cat /proc/modules 2>&1`),
-		probeExec(`dmesg 2>&1 | grep -Ei 'pathmask|nohello|module_layout|disagrees|unknown symbol|invalid module|exec format' | tail -n 80`),
+		probeExec(`dmesg 2>&1 | grep -Ei 'pathmask|procguard|nohello|module_layout|disagrees|unknown symbol|invalid module|exec format' | tail -n 80`),
 		probeExec(denyResolveScript),
 	]);
 
@@ -1847,6 +1860,23 @@ function buildKernelEnv(facts) {
 	return lines.join("\n");
 }
 
+function buildProcguardSection(snapshot) {
+	const koPresent = (snapshot.procguardKoInfo || "").trim() === "present";
+	const loaded = !!(snapshot.procguardModuleText || "").trim();
+	const enabled = parseBoolish(snapshot.procguardConfText, false);
+	const lines = [
+		`procguard.ko: ${koPresent ? "存在" : "缺失"}`,
+		`procguard.conf: ${enabled ? "1（启用）" : "0（停用）"}`,
+		`已加载: ${loaded ? "是" : "否"}`,
+	];
+	if (loaded) {
+		lines.push(`blocked_hits: ${(snapshot.procguardHits || "").trim() || "0"}`);
+		lines.push(`missed: ${(snapshot.procguardMissed || "").trim() || "0"}`);
+		lines.push(`target_gid: ${(snapshot.procguardGid || "").trim() || "3009"}`);
+	}
+	return lines.join("\n");
+}
+
 function buildReport(snapshot = lastSnapshot) {
 	const facts = snapshot.facts;
 	const verdict = snapshot.verdict;
@@ -1875,6 +1905,9 @@ function buildReport(snapshot = lastSnapshot) {
 		"",
 		"=== 配置文件 ===",
 		snapshot.configLog || "(未采集)",
+		"",
+		"=== procguard（隔离防护） ===",
+		buildProcguardSection(snapshot),
 		"",
 		"=== 脚本日志 logcat ===",
 		snapshot.scriptLog && !/^ERROR:/.test(snapshot.scriptLog) && snapshot.scriptLog.trim()
@@ -2589,7 +2622,7 @@ async function reloadModule() {
 
 async function pauseHiding() {
 	const output = await execShell(
-		`touch ${shellQuote(files.sceneDebugfsWatchStop)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; log -p i -t pathmask 'hidden paths paused from WebUI'; printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask unloaded'; else printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask is not loaded'; fi; dmesg | grep -Ei 'pathmask|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
+		`touch ${shellQuote(files.sceneDebugfsWatchStop)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; log -p i -t pathmask 'hidden paths paused from WebUI'; printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask unloaded'; else printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask is not loaded'; fi; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
 	);
 	setLogContent("kernel", output);
 	await refreshDiagnostics();
@@ -2631,12 +2664,14 @@ getprop ro.build.version.release 2>/dev/null || true
 getprop ro.product.manufacturer 2>/dev/null || true
 getprop ro.product.device 2>/dev/null || true
 echo '--- modules ---'
-grep -E '^(pathmask|nohello) ' /proc/modules 2>/dev/null || true
+grep -E '^(pathmask|procguard|nohello) ' /proc/modules 2>/dev/null || true
 echo '--- module files ---'
 ls -l ${shellQuote(MODDIR)} 2>/dev/null || true
 ls -l ${shellQuote(LEGACY_MODDIR)} 2>/dev/null || true
 echo '--- sysfs parameters ---'
 for f in /sys/module/pathmask/parameters/*; do [ -f "$f" ] && echo "$(basename "$f")=$(cat "$f" 2>/dev/null)"; done
+echo '--- procguard parameters ---'
+for f in /sys/module/procguard/parameters/*; do [ -f "$f" ] && echo "$(basename "$f")=$(cat "$f" 2>/dev/null)"; done
 echo '--- load failure guard ---'
 [ -f ${shellQuote(files.failCount)} ] && echo "load_fail_count=$(cat ${shellQuote(files.failCount)} 2>/dev/null)" || echo "load_fail_count=0"
 [ -f ${shellQuote(files.failReason)} ] && echo "load_fail_reason=$(cat ${shellQuote(files.failReason)} 2>/dev/null)"
