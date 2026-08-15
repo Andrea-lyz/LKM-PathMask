@@ -1,3 +1,17 @@
+# PathMask 2.7.0
+
+## 解决了什么
+
+- **WebUI 防护页新增「写入行为伪装」（write_op_policy）**：跟随原厂（默认）/ 伪装不存在 / 旧版行为三选，切换自动持久化到 `write_op_policy.conf` 并立即热重载。诊断报告关键事实新增当前策略一行，配置与运行值不一致时会提示尚未热重载。
+- **「伪装不存在」策略正式可用**：检测方对隐藏路径执行 mkdir / Create / rename / 删除等写操作时，错误码被改写为与"路径真实不存在"完全一致的画像（mkdirat / linkat / symlinkat / rename 目标 / open(O_CREAT) / openat2 → EACCES，unlinkat / rename 源 → ENOENT）。在 FUSE 存储上 ENOENT 恰是"存在但被隐藏"的特征，此举切断存在性反推链。钩子位于 arm64 syscall 入口层，FUSE/BPF 原生遮蔽产生的错误码同样会被覆写。
+- **防护页新增「写入伪装说明」卡片**：三种策略的适用场景、验证方法（对隐藏路径 mkdir 应得 EACCES 而非 ENOENT）与已知边界（仅对作用范围内 UID 生效；App 可写目录下的目标无法完全伪装）。
+- **修复 WebUI 标题版本号不随 module.prop 同步的遗留问题**（2.6.x 页面一直显示 v2.6.0），此后发布统一升全部版本落点。
+
+## 其他变化
+
+- README / README.zh-CN 补充 `write_op_policy.conf` 说明。
+- 版本号统一：module.prop 2.7.0（versionCode 53）、update/*.json、WebUI 标题。
+
 # PathMask 2.6.1
 
 - **修复发布包缺失 procguard.ko**。CI 发布链路走 POSIX 版 `tools/package_ksu.sh`,上一版只拷贝了 pathmask.ko,导致 v2.6.0 的 zip 不含 procguard.ko(WebUI 防护页显示"当前模块包未包含 procguard.ko,防护不可用")。`package_ksu.sh` 现在会自动发现并打包 pathmask ko 同目录的 procguard.ko(`<base>_procguard.ko` 或 `procguard.ko`),CI 资产准备步骤同步收集 `*_procguard.ko`。

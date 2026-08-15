@@ -23,6 +23,8 @@
 #include <linux/string.h>
 #include <linux/uidgid.h>
 #include <linux/uaccess.h>
+#include <asm/syscall.h>
+#include <asm/unistd.h>
 
 #define PM_LOG_PREFIX "pathmask: "
 #define MAX_HIDE_TARGETS 64
@@ -139,6 +141,19 @@ MODULE_PARM_DESC(syscall_hooks,
 static char scope_mode[16] = "global";
 module_param_string(scope_mode, scope_mode, sizeof(scope_mode), 0644);
 MODULE_PARM_DESC(scope_mode, "Hide scope: global, deny, or allow");
+
+enum pathmask_write_op_policy {
+	WRITE_OP_PASSTHROUGH = 0,
+	WRITE_OP_EACCES,
+	WRITE_OP_ENOENT,
+};
+
+static char write_op_policy[16] = "passthrough";
+module_param_string(write_op_policy, write_op_policy, sizeof(write_op_policy), 0644);
+MODULE_PARM_DESC(write_op_policy,
+	"write-class syscall policy on hidden targets: passthrough (default, native fs semantics), eacces (syscall-level absent-emulation incl. open(O_CREAT)), enoent (legacy blanket ENOENT)");
+
+static enum pathmask_write_op_policy active_write_policy = WRITE_OP_PASSTHROUGH;
 
 static char deny_uids[UID_LIST_LEN];
 module_param_string(deny_uids, deny_uids, sizeof(deny_uids), 0644);
@@ -366,6 +381,28 @@ static int parse_scope_mode(void)
 	return -EINVAL;
 }
 
+static int parse_write_op_policy(void)
+{
+	if (!strcmp(write_op_policy, "passthrough")) {
+		active_write_policy = WRITE_OP_PASSTHROUGH;
+		return 0;
+	}
+
+	if (!strcmp(write_op_policy, "eacces")) {
+		active_write_policy = WRITE_OP_EACCES;
+		return 0;
+	}
+
+	if (!strcmp(write_op_policy, "enoent")) {
+		active_write_policy = WRITE_OP_ENOENT;
+		return 0;
+	}
+
+	pr_err(PM_LOG_PREFIX "unsupported write_op_policy=%s\n",
+	       write_op_policy);
+	return -EINVAL;
+}
+
 static int add_deny_uid(uid_t uid)
 {
 	if (deny_uid_count >= MAX_DENY_UIDS) {
@@ -516,6 +553,59 @@ struct inode_perm_data {
 #define PM_PERM_INODE_REG 0
 #endif
 
+/*
+ * errno policy for write-class syscalls. inode_permission/vfs_getattr are
+ * consulted mid-operation by filesystems (FUSE+BPF does this during
+ * mkdir/rename via lookup_one_qstr_excl-style flows), so a blanket -ENOENT
+ * override leaks through as the syscall errno: mkdir on a hidden but
+ * existing directory reports ENOENT where stock returns EACCES/EEXIST --
+ * a deterministic fingerprint. passthrough (default) leaves the return
+ * value untouched so the native fs/FUSE policy produces the stock errno;
+ * parents of hidden targets are virtually never writable by the probing
+ * app, so the native result is the stock one.
+ *
+ * arm64 only ships the *at variants (no mkdir/rename/link/symlink/rmdir
+ * numbers). Kernel threads have no user pt_regs frame; treat them as
+ * non-write-class so they keep the legacy behaviour.
+ */
+static inline bool pm_is_write_class_syscall(void)
+{
+	int nr;
+
+	if (current->flags & PF_KTHREAD)
+		return false;
+
+	nr = syscall_get_nr(current, task_pt_regs(current));
+	switch (nr) {
+	case __NR_mkdirat:
+	case __NR_renameat:
+	case __NR_renameat2:
+	case __NR_linkat:
+	case __NR_symlinkat:
+	case __NR_unlinkat:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static inline void pm_apply_hide_errno(struct pt_regs *regs)
+{
+	if (pm_is_write_class_syscall()) {
+		switch (active_write_policy) {
+		case WRITE_OP_PASSTHROUGH:
+			return;
+		case WRITE_OP_EACCES:
+			regs_set_return_value(regs, -EACCES);
+			return;
+		case WRITE_OP_ENOENT:
+			break;
+		}
+	}
+
+	regs_set_return_value(regs, -ENOENT);
+}
+
 static int perm_inode_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	struct inode_perm_data *d = (struct inode_perm_data *)ri->data;
@@ -533,7 +623,7 @@ static int perm_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 	struct inode_perm_data *d = (struct inode_perm_data *)ri->data;
 
 	if (d->matched)
-		regs_set_return_value(regs, -ENOENT);
+		pm_apply_hide_errno(regs);
 	return 0;
 }
 
@@ -567,7 +657,7 @@ static int getattr_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 	struct inode_perm_data *d = (struct inode_perm_data *)ri->data;
 
 	if (d->matched)
-		regs_set_return_value(regs, -ENOENT);
+		pm_apply_hide_errno(regs);
 	return 0;
 }
 
@@ -593,6 +683,7 @@ static int getattr_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 struct syscall_match_data {
 	bool matched;
 	bool needs_close;
+	long err;
 };
 
 static atomic_t pm_syscall_seen = ATOMIC_INIT(0);
@@ -657,6 +748,7 @@ static int sys_path_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 
 	d->matched = false;
 	d->needs_close = false;
+	d->err = -ENOENT;
 
 	if (!sys_path_match_user_filename(regs))
 		return 0;
@@ -674,6 +766,7 @@ static int sys_openat_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 
 	d->matched = false;
 	d->needs_close = false;
+	d->err = -ENOENT;
 
 	/*
 	 * For openat we can only fake -ENOENT if we also have a way to
@@ -689,9 +782,58 @@ static int sys_openat_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 
 	d->matched = true;
 	d->needs_close = true;
+
+	/*
+	 * Under write_op_policy=eacces an open with O_CREAT must present
+	 * the absent profile (-EACCES, "create denied on a nonexistent
+	 * entry"): on FUSE+redaction storage -ENOENT here is exactly the
+	 * signature of an existing-but-hidden object. Plain opens keep
+	 * -ENOENT. Flags live in regs[2] for openat.
+	 */
+	if (active_write_policy == WRITE_OP_EACCES &&
+	    (((struct pt_regs *)regs->regs[0])->regs[2] & O_CREAT))
+		d->err = -EACCES;
+
 	if (atomic_cmpxchg(&pm_syscall_seen, 0, 1) == 0)
 		pr_info(PM_LOG_PREFIX
 			"syscall path hook fired (first time)\n");
+	return 0;
+}
+
+/*
+ * openat2 variant of the open hook: same semantics, but the flags are the
+ * first u64 of struct open_how pointed to by regs[2]. No first-fire log
+ * here; the shared pm_syscall_seen counter covers the family.
+ */
+static int sys_openat2_entry(struct kretprobe_instance *ri,
+			     struct pt_regs *regs)
+{
+	struct syscall_match_data *d = (struct syscall_match_data *)ri->data;
+	struct pt_regs *user_regs = (struct pt_regs *)regs->regs[0];
+
+	d->matched = false;
+	d->needs_close = false;
+	d->err = -ENOENT;
+
+	if (!pm_close_fd)
+		return 0;
+
+	if (!sys_path_match_user_filename(regs))
+		return 0;
+
+	d->matched = true;
+	d->needs_close = true;
+
+	if (active_write_policy == WRITE_OP_EACCES && user_regs) {
+		u64 how_flags = 0;
+
+		if (!copy_from_user(&how_flags,
+				    (const void __user *)user_regs->regs[2],
+				    sizeof(how_flags)) &&
+		    (how_flags & O_CREAT))
+			d->err = -EACCES;
+	}
+
 	return 0;
 }
 
@@ -712,7 +854,7 @@ static int sys_path_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 		pm_invoke_close_fd((unsigned int)ret);
 	}
 
-	regs_set_return_value(regs, -ENOENT);
+	regs_set_return_value(regs, d->err);
 	return 0;
 }
 
@@ -745,7 +887,7 @@ static struct pm_syscall_probe {
 	{ .symbol = "__arm64_sys_openat",     .short_name = "openat",
 	  .entry = sys_openat_entry },
 	{ .symbol = "__arm64_sys_openat2",    .short_name = "openat2",
-	  .entry = sys_openat_entry },
+	  .entry = sys_openat2_entry },
 };
 
 /*
@@ -896,6 +1038,182 @@ static void unregister_syscall_hooks(void)
 	}
 }
 
+/*
+ * Write-class syscall hooks, active only with write_op_policy=eacces.
+ * The inode_permission level cannot shape mkdir/rename errno on FUSE+BPF
+ * storage: the ENOENT there is produced by Android's native package
+ * redaction during lookup and never passes through a permission check we
+ * can hook. The syscall entry stubs are the guaranteed interception point
+ * (same reasoning as the read-side fallback hooks above), so we rewrite
+ * the final errno to make a hidden-but-existing path present the exact
+ * profile of a genuinely absent one:
+ *
+ *   mkdirat / linkat / symlinkat / renameat(dst)  -> -EACCES
+ *   unlinkat / renameat(src)                      -> -ENOENT
+ */
+struct write_syscall_data {
+	bool matched;
+	long err;
+};
+
+static atomic_t pm_write_seen = ATOMIC_INIT(0);
+
+static bool sys_path_match_user_reg(struct pt_regs *regs, unsigned int regno)
+{
+	struct pt_regs *user_regs = (struct pt_regs *)regs->regs[0];
+	char buf[TARGET_TEXT_LEN];
+	long len;
+
+	if (!user_regs || !should_hide_for_current())
+		return false;
+
+	len = strncpy_from_user(buf,
+				(const char __user *)user_regs->regs[regno],
+				sizeof(buf));
+	if (len <= 0)
+		return false;
+	buf[sizeof(buf) - 1] = '\0';
+
+	return sys_path_matches_target(buf);
+}
+
+static void write_match_log_once(void)
+{
+	if (atomic_cmpxchg(&pm_write_seen, 0, 1) == 0)
+		pr_info(PM_LOG_PREFIX
+			"write-class syscall hook fired (first time)\n");
+}
+
+static int sys_mkdirat_entry(struct kretprobe_instance *ri,
+			     struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	d->matched = sys_path_match_user_reg(regs, 1);
+	d->err = -EACCES;
+	if (d->matched)
+		write_match_log_once();
+	return 0;
+}
+
+static int sys_unlinkat_entry(struct kretprobe_instance *ri,
+			      struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	d->matched = sys_path_match_user_reg(regs, 1);
+	d->err = -ENOENT;
+	if (d->matched)
+		write_match_log_once();
+	return 0;
+}
+
+/*
+ * renameat/renameat2/linkat carry two paths: oldpath in regs[1] and
+ * newpath in regs[3]. A hidden source means "absent" (-ENOENT); a hidden
+ * destination means "not writable" (-EACCES). Source wins when both hit.
+ */
+static int sys_two_path_entry(struct kretprobe_instance *ri,
+			      struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	d->matched = false;
+	d->err = 0;
+
+	if (sys_path_match_user_reg(regs, 1)) {
+		d->matched = true;
+		d->err = -ENOENT;
+	} else if (sys_path_match_user_reg(regs, 3)) {
+		d->matched = true;
+		d->err = -EACCES;
+	}
+
+	if (d->matched)
+		write_match_log_once();
+	return 0;
+}
+
+/*
+ * symlinkat(target, newdfd, linkpath): regs[1] is the symlink content
+ * string, not a lookup target; the path being created is regs[2].
+ */
+static int sys_symlinkat_entry(struct kretprobe_instance *ri,
+			       struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	d->matched = sys_path_match_user_reg(regs, 2);
+	d->err = -EACCES;
+	if (d->matched)
+		write_match_log_once();
+	return 0;
+}
+
+static int sys_write_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	struct write_syscall_data *d = (struct write_syscall_data *)ri->data;
+
+	if (d->matched)
+		regs_set_return_value(regs, d->err);
+	return 0;
+}
+
+static struct pm_write_probe {
+	const char *symbol;
+	pm_syscall_entry_t entry;
+	struct kretprobe rp;
+	bool registered;
+} pm_write_probes[] = {
+	{ .symbol = "__arm64_sys_mkdirat",   .entry = sys_mkdirat_entry },
+	{ .symbol = "__arm64_sys_unlinkat",  .entry = sys_unlinkat_entry },
+	{ .symbol = "__arm64_sys_renameat",  .entry = sys_two_path_entry },
+	{ .symbol = "__arm64_sys_renameat2", .entry = sys_two_path_entry },
+	{ .symbol = "__arm64_sys_linkat",    .entry = sys_two_path_entry },
+	{ .symbol = "__arm64_sys_symlinkat", .entry = sys_symlinkat_entry },
+};
+
+static void register_write_hooks(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pm_write_probes); i++) {
+		struct pm_write_probe *p = &pm_write_probes[i];
+		int ret;
+
+		p->rp.kp.symbol_name = p->symbol;
+		p->rp.entry_handler = p->entry;
+		p->rp.handler = sys_write_exit;
+		p->rp.data_size = sizeof(struct write_syscall_data);
+		p->rp.maxactive = 40;
+
+		ret = register_kretprobe(&p->rp);
+		if (ret) {
+			pr_warn(PM_LOG_PREFIX
+				"register_kretprobe(%s) failed: %d (skip)\n",
+				p->symbol, ret);
+			continue;
+		}
+		p->registered = true;
+		pr_info(PM_LOG_PREFIX "hooked %s (write-class)\n",
+			p->symbol);
+	}
+}
+
+static void unregister_write_hooks(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pm_write_probes); i++) {
+		struct pm_write_probe *p = &pm_write_probes[i];
+
+		if (p->registered) {
+			unregister_kretprobe(&p->rp);
+			p->registered = false;
+		}
+	}
+}
+
 #define GETDENTS_BUF_LIMIT 65536u
 
 static struct kretprobe kp_getdents;
@@ -1018,6 +1336,10 @@ static int __init pathmask_init(void)
 	if (ret)
 		return ret;
 
+	ret = parse_write_op_policy();
+	if (ret)
+		return ret;
+
 	ret = parse_deny_uids();
 	if (ret)
 		return ret;
@@ -1068,7 +1390,14 @@ static int __init pathmask_init(void)
 		unsigned int wanted = parse_syscall_hooks();
 
 		if (wanted) {
-			register_syscall_hooks();
+	register_syscall_hooks();
+
+	if (active_write_policy == WRITE_OP_EACCES)
+		register_write_hooks();
+	else
+		pr_info(PM_LOG_PREFIX
+			"write-class syscall hooks disabled (write_op_policy=%s)\n",
+			write_op_policy);
 			pr_info(PM_LOG_PREFIX
 				"syscall fallback: %u of %u probe(s) requested\n",
 				wanted,
@@ -1101,9 +1430,9 @@ static int __init pathmask_init(void)
 	}
 
 	pr_info(PM_LOG_PREFIX
-		"loaded -- %u target(s) hidden, scope=%s, scope_uid_count=%u hide_isolated=%d enable_syscall_hooks=%d syscall_hooks=\"%s\"\n",
+		"loaded -- %u target(s) hidden, scope=%s, scope_uid_count=%u hide_isolated=%d enable_syscall_hooks=%d syscall_hooks=\"%s\" write_op_policy=%s\n",
 		target_count, scope_mode, deny_uid_count, hide_isolated,
-		enable_syscall_hooks, syscall_hooks);
+		enable_syscall_hooks, syscall_hooks, write_op_policy);
 	return 0;
 }
 
@@ -1112,6 +1441,7 @@ static void __exit pathmask_exit(void)
 	unregister_kretprobe(&kp_inode_perm);
 	unregister_kretprobe(&kp_inode_getattr);
 	unregister_syscall_hooks();
+	unregister_write_hooks();
 	if (getdents_registered) {
 		unregister_kretprobe(&kp_getdents);
 		getdents_registered = false;

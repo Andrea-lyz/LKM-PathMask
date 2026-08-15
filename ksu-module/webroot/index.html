@@ -3,13 +3,13 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>PathMask v2.6.0</title>
+	<title>PathMask v2.7.0</title>
 	<link rel="stylesheet" href="./style.css">
 </head>
 <body>
 	<header class="topbar">
 		<div>
-			<h1><span>PathMask</span><small>v2.6.0</small></h1>
+			<h1><span>PathMask</span><small>v2.7.0</small></h1>
 			<p id="statusText">正在读取状态...</p>
 		</div>
 		<div class="topActions">
@@ -193,6 +193,38 @@
 					<input id="procguardEnableInput" type="checkbox">
 				</label>
 				<p id="procguardStats" class="hint">正在读取状态…</p>
+			</section>
+
+			<section class="panel">
+				<div class="sectionTitle">
+					<h2>写入行为伪装</h2>
+				</div>
+				<div class="segmented">
+					<label>
+						<input type="radio" name="writePolicy" value="passthrough">
+						<span>跟随原厂</span>
+					</label>
+					<label>
+						<input type="radio" name="writePolicy" value="eacces">
+						<span>伪装不存在</span>
+					</label>
+					<label>
+						<input type="radio" name="writePolicy" value="enoent">
+						<span>旧版行为</span>
+					</label>
+				</div>
+				<p class="hint">检测方对隐藏路径执行写操作（mkdir / Create / rename / 删除）时返回的错误码策略。切换后自动保存并热重载生效。</p>
+			</section>
+
+			<section class="panel">
+				<div class="sectionTitle">
+					<h2>写入伪装说明</h2>
+				</div>
+				<p class="hint">检测方会用写操作探测隐藏路径，并根据错误码反推路径是否存在：在 FUSE 存储上，mkdir 返回 ENOENT 恰恰是"路径存在但被隐藏"的特征，返回 EACCES 才与"路径真实不存在"一致。</p>
+				<p class="hint"><strong>跟随原厂（默认）</strong>：写操作不被拦截，由原生文件系统 / FUSE 返回原厂错误码，适合一般场景。</p>
+				<p class="hint"><strong>伪装不存在</strong>：mkdir / Create / rename 目标返回 EACCES，删除 / rename 源返回 ENOENT，与"路径真实不存在"的错误码画像完全一致，阻断存在性反推。有明确对抗检测需求时选用。</p>
+				<p class="hint"><strong>旧版行为</strong>：写操作一律返回 ENOENT，可能与原厂错误码不一致，仅为兼容旧配置保留，不建议主动选择。</p>
+				<p class="hint">验证方法：用检测工具对隐藏路径执行 mkdir，期望返回 EACCES 而非 ENOENT。边界：仅对作用范围内的 UID 生效；位于 App 可写目录（如 Documents）下的目标无法完全伪装。</p>
 			</section>
 
 			<section class="panel">
