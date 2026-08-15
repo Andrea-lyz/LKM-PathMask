@@ -18,6 +18,15 @@ if grep -q '^pathmask ' /proc/modules 2>/dev/null; then
 	fi
 fi
 
+# Unload the procguard companion module if this build shipped one.
+if grep -q '^procguard ' /proc/modules 2>/dev/null; then
+	if rmmod procguard 2>/dev/null; then
+		log_i "rmmod procguard succeeded"
+	else
+		log_i "rmmod procguard failed; module will unload on next reboot"
+	fi
+fi
+
 # Drop the persistent config directory so a future fresh install starts from
 # the zip-bundled defaults instead of inheriting stale UID lists, fail
 # counters, boot_state, etc.

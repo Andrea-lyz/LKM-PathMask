@@ -64,6 +64,9 @@ Implemented:
   one-click diagnostic report copying, hot reload, and temporary pause.
 - Skips future automatic load attempts after repeated `insmod` failures until
   the user retries from WebUI or clears the failure guard.
+- Ships an optional companion module `procguard.ko` (WebUI "Protection" tab,
+  default off) that neutralizes the leaked gid 3009 (AID_READPROC) for Android
+  isolated UIDs, closing the LSPosed Privisolated /proc-enumeration vector.
 - Avoids importing `kern_path()` / `path_put()` directly. Target resolution
   resolves those helper addresses through kprobes so OEM kernels that prune
   unused VFS helper exports are less likely to reject the module.
@@ -251,6 +254,9 @@ edits these files for you, but they can also be inspected manually:
   twice it. The boot service writes its current phase to
   `/data/adb/pathmask/boot_state` so the WebUI can show whether the module is
   still waiting or has decided to skip loading.
+- `/data/adb/pathmask/procguard.conf`: isolation-protection switch. Default
+  `0`. `1` loads the companion `procguard.ko` at boot; the WebUI Protection
+  tab writes this file and applies the change immediately.
 
 The latest Scene auto-discovery result is recorded in
 `/data/adb/pathmask/scene_debugfs_state`, with resolved paths written one per

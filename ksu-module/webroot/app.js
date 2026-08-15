@@ -31,6 +31,7 @@ const MODULE_ID = "pathmask";
 const LEGACY_MODULE_ID = "nohello-demo";
 const MODULE_NAME = "pathmask";
 const LEGACY_MODULE_NAME = "nohello";
+const PROCGUARD_MODULE_NAME = "procguard";
 const MODDIR = `/data/adb/modules/${MODULE_ID}`;
 const LEGACY_MODDIR = `/data/adb/modules/${LEGACY_MODULE_ID}`;
 const CONFIGDIR = "/data/adb/pathmask";
@@ -100,6 +101,8 @@ const files = {
 	failReason: `${CONFIGDIR}/load_fail_reason`,
 	service: `${MODDIR}/service.sh`,
 	ko: `${MODDIR}/pathmask.ko`,
+	procguardKo: `${MODDIR}/procguard.ko`,
+	procguardConf: `${CONFIGDIR}/procguard.conf`,
 };
 
 let apps = [];
@@ -351,8 +354,8 @@ function sortedPackageList(mode) {
 function parseBoolish(text, fallback = false) {
 	const v = firstLine(text).toLowerCase();
 	if (v === "") return fallback;
-	if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
-	if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+	if (v === "1" || v === "true" || v === "yes" || v === "on" || v === "y") return true;
+	if (v === "0" || v === "false" || v === "no" || v === "off" || v === "n") return false;
 	return fallback;
 }
 
@@ -721,6 +724,19 @@ function updateHealthList() {
 		items.push({ level: "ok", title: "模块文件存在", body: `${files.ko}` });
 	}
 
+	const pgKoPresent = (snapshot.procguardKoInfo || "").trim() === "present";
+	const pgLoaded = !!(snapshot.procguardModuleText || "").trim();
+	const pgEnabled = parseBoolish(snapshot.procguardConfText, false);
+	if (!pgKoPresent && pgEnabled) {
+		items.push({ level: "warn", title: "procguard.ko 缺失", body: "procguard.conf 为启用但模块包里没有 procguard.ko，隔离防护不可用。" });
+	} else if (pgLoaded) {
+		items.push({ level: "ok", title: "隔离防护生效中", body: `procguard 已加载，已拦截 ${(snapshot.procguardHits || "").trim() || "0"} 次 readproc 查询。` });
+	} else if (pgEnabled) {
+		items.push({ level: "warn", title: "隔离防护已启用但未加载", body: "在「防护」页重新切换一次开关，或点「保存并热重载」。" });
+	} else {
+		items.push({ level: "ok", title: "隔离防护已停用", body: "隔离进程仍可遍历 /proc；需要时到「防护」页启用。" });
+	}
+
 	if ((scope === "deny" || scope === "allow") && selected.length === 0 && directUids.length === 0 && allowSystemUids.length === 0 && sysUids.length === 0) {
 		const listName = scope === "allow" ? "白名单" : "黑名单";
 		items.push({ level: "bad", title: `${listName}为空`, body: `${scope} 模式下没有包名或 UID，service.sh 会跳过加载。` });
@@ -974,6 +990,12 @@ function summarizeDmesg(text) {
 		notFoundLines: [],     // ["pathmask: /dev/foo not found (err=-2), skip"]
 		errorLines: [],        // disagrees, unknown symbol, etc
 	};
+	// dmesg keeps every load cycle since boot (each hot reload appends
+	// its own hooked/fired/target lines), so the same line repeats per
+	// cycle. Dedupe while preserving first-seen order for display.
+	const pushUnique = (arr, value) => {
+		if (!arr.includes(value)) arr.push(value);
+	};
 	for (const raw of lines) {
 		const line = raw.trim();
 		if (!line) continue;
@@ -981,17 +1003,17 @@ function summarizeDmesg(text) {
 		const clean = line.replace(/^\s*\[\s*\d+\.\d+\]\s*/, "");
 		let m;
 		if ((m = clean.match(/^pathmask:\s+hooked\s+(\S+)/))) {
-			sum.hookedSymbols.push(m[1]);
+			pushUnique(sum.hookedSymbols, m[1]);
 		} else if ((m = clean.match(/^pathmask:\s+skip\s+(\S+)\s+\(disabled\)/))) {
-			sum.skippedSymbols.push(m[1]);
+			pushUnique(sum.skippedSymbols, m[1]);
 		} else if ((m = clean.match(/^pathmask:\s+(\w+(?:\s+\w+)?)\s+hook fired \(first time\)/))) {
-			sum.hookFiredFirstTime.push(m[1]);
+			pushUnique(sum.hookFiredFirstTime, m[1]);
 		} else if (clean.startsWith("pathmask: loaded -- ")) {
 			sum.loadedLine = clean.replace(/^pathmask:\s+/, "");
 		} else if ((m = clean.match(/^pathmask:\s+target\[\d+\]\s+(.+)/))) {
-			sum.targetLines.push(m[1]);
+			pushUnique(sum.targetLines, m[1]);
 		} else if (/pathmask:.*not found|skip/.test(clean) && clean.includes("err=")) {
-			sum.notFoundLines.push(clean.replace(/^pathmask:\s+/, ""));
+			pushUnique(sum.notFoundLines, clean.replace(/^pathmask:\s+/, ""));
 		} else if (/disagrees about version of symbol|Unknown symbol|invalid module format|exec format error|module_layout/i.test(clean)) {
 			sum.errorLines.push(clean);
 		}
@@ -1137,7 +1159,7 @@ true
 		probeExec(`[ -f ${shellQuote(files.ko)} ] && sha1sum ${shellQuote(files.ko)} 2>&1 | awk '{print $1}' || echo missing`),
 		probeExec(`[ -f ${shellQuote(files.ko)} ] && stat -c '%s' ${shellQuote(files.ko)} 2>&1 || echo missing`),
 		probeExec(`cat /proc/modules 2>&1`),
-		probeExec(`dmesg 2>&1 | grep -Ei 'pathmask|nohello|module_layout|disagrees|unknown symbol|invalid module|exec format' | tail -n 80`),
+		probeExec(`dmesg 2>&1 | grep -Ei 'pathmask|procguard|nohello|module_layout|disagrees|unknown symbol|invalid module|exec format' | tail -n 80`),
 		probeExec(denyResolveScript),
 	]);
 
@@ -1147,7 +1169,7 @@ true
 	const otherLkms = allModules
 		.split(/\r?\n/)
 		.map((l) => l.split(" ")[0])
-		.filter((n) => n && n !== "pathmask" && n !== "nohello");
+		.filter((n) => n && n !== "pathmask" && n !== "procguard" && n !== "nohello");
 
 	const dmesgRaw = ok(dmesgRes);
 	const dmesgRestrict = ok(dmesgRestrictRes);
@@ -1641,11 +1663,20 @@ function buildKeyFacts(facts) {
 	// Only emit when the module is loaded; if it isn't, sysfs is
 	// stale or empty so the comparison is meaningless.
 	if (facts.moduleLoaded && facts.confTargetCount > 0 && facts.sysResolvedCount >= 0) {
-		const matched = facts.sysResolvedCount === facts.confTargetCount;
+		const resolved = facts.sysResolvedCount;
+		const configured = facts.confTargetCount;
+		// resolved > configured happens when Scene auto-discovery adds
+		// runtime paths on top of the configured list -- that is a
+		// success, not a "skipped targets" warning.
+		const note = resolved === configured
+			? ""
+			: resolved > configured
+				? `（含 ${resolved - configured} 条运行时自动识别路径）`
+				: "（部分路径加载时不存在被 skip）";
 		lines.push(fmtFactRow(
 			"路径解析",
-			matched ? FACT_OK : FACT_WARN,
-			`内核解析 ${facts.sysResolvedCount} / 配置 ${facts.confTargetCount}${matched ? "" : "（部分路径加载时不存在被 skip）"}`,
+			resolved >= configured ? FACT_OK : FACT_WARN,
+			`内核解析 ${resolved} / 配置 ${configured}${note}`,
 		));
 	}
 
@@ -1844,6 +1875,23 @@ function buildKernelEnv(facts) {
 	return lines.join("\n");
 }
 
+function buildProcguardSection(snapshot) {
+	const koPresent = (snapshot.procguardKoInfo || "").trim() === "present";
+	const loaded = !!(snapshot.procguardModuleText || "").trim();
+	const enabled = parseBoolish(snapshot.procguardConfText, false);
+	const lines = [
+		`procguard.ko: ${koPresent ? "存在" : "缺失"}`,
+		`procguard.conf: ${enabled ? "1（启用）" : "0（停用）"}`,
+		`已加载: ${loaded ? "是" : "否"}`,
+	];
+	if (loaded) {
+		lines.push(`blocked_hits: ${(snapshot.procguardHits || "").trim() || "0"}`);
+		lines.push(`missed: ${(snapshot.procguardMissed || "").trim() || "0"}`);
+		lines.push(`target_gid: ${(snapshot.procguardGid || "").trim() || "3009"}`);
+	}
+	return lines.join("\n");
+}
+
 function buildReport(snapshot = lastSnapshot) {
 	const facts = snapshot.facts;
 	const verdict = snapshot.verdict;
@@ -1872,6 +1920,9 @@ function buildReport(snapshot = lastSnapshot) {
 		"",
 		"=== 配置文件 ===",
 		snapshot.configLog || "(未采集)",
+		"",
+		"=== procguard（隔离防护） ===",
+		buildProcguardSection(snapshot),
 		"",
 		"=== 脚本日志 logcat ===",
 		snapshot.scriptLog && !/^ERROR:/.test(snapshot.scriptLog) && snapshot.scriptLog.trim()
@@ -1962,6 +2013,50 @@ async function loadApps() {
 	showToast(`已加载 ${apps.length} 个应用`);
 }
 
+function renderProcguard(snapshot) {
+	const input = $("#procguardEnableInput");
+	const stats = $("#procguardStats");
+	if (!input || !stats) return;
+	const koPresent = (snapshot.procguardKoInfo || "").trim() === "present";
+	const loaded = !!(snapshot.procguardModuleText || "").trim();
+	const enabled = parseBoolish(snapshot.procguardConfText, false);
+	input.disabled = !koPresent;
+	input.checked = enabled || loaded;
+	if (!koPresent) {
+		stats.textContent = "当前模块包未包含 procguard.ko，防护不可用";
+		return;
+	}
+	if (loaded) {
+		const hits = (snapshot.procguardHits || "").trim() || "0";
+		const missed = (snapshot.procguardMissed || "").trim() || "0";
+		const gid = (snapshot.procguardGid || "").trim() || "3009";
+		stats.textContent = `procguard 已加载：已拦截 ${hits} 次隔离进程对 gid ${gid} 的查询（missed=${missed}）`;
+	} else if (enabled) {
+		stats.textContent = "已启用但尚未加载：重新切换一次开关或热重载后生效";
+	} else {
+		stats.textContent = "已停用：隔离进程仍可遍历 /proc";
+	}
+}
+
+// Enable  = persist flag + full reload of BOTH modules via service.sh
+//           (it re-reads procguard.conf and loads what is enabled).
+// Disable = persist flag + unload procguard only; pathmask keeps running.
+async function setProcguardEnabled(enable) {
+	await writeLines(files.procguardConf, [enable ? "1" : "0"]);
+	if (enable) {
+		const output = await execShell(
+			`if grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
+		);
+		setLogContent("kernel", output);
+		await refreshDiagnostics();
+		showToast("隔离防护已启用");
+	} else {
+		await execShell(`if grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME}; fi; true`);
+		showToast("隔离防护已停用");
+	}
+	await refreshConfig();
+}
+
 async function refreshConfig() {
 	const targetText = await readFile(files.targets);
 	const hideText = await readFile(files.hideDirents);
@@ -1982,6 +2077,12 @@ async function refreshConfig() {
 	const legacyModuleText = await safeExec(`grep '^${LEGACY_MODULE_NAME} ' /proc/modules || true`);
 	const sysDenyUids = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/deny_uids ] && cat /sys/module/${MODULE_NAME}/parameters/deny_uids || true`);
 	const sysResolvedCount = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/resolved_count ] && cat /sys/module/${MODULE_NAME}/parameters/resolved_count || true`);
+	const procguardConfText = await readFile(files.procguardConf);
+	const procguardModuleText = await safeExec(`grep '^${PROCGUARD_MODULE_NAME} ' /proc/modules || true`);
+	const procguardKoInfo = await safeExec(`[ -f ${shellQuote(files.procguardKo)} ] && echo present || echo missing`);
+	const procguardHits = await safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/blocked_hits ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/blocked_hits || true`);
+	const procguardMissed = await safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/missed ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/missed || true`);
+	const procguardGid = await safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/target_gid ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/target_gid || true`);
 	const koInfo = await safeExec(`[ -f ${shellQuote(files.ko)} ] && ls -l ${shellQuote(files.ko)} || echo missing`);
 	const moduleFlags = await safeExec(`ls -1 ${shellQuote(MODDIR)}/disable ${shellQuote(MODDIR)}/remove 2>/dev/null || true`);
 	const legacyConfigInfo = await safeExec(`[ -d ${shellQuote(LEGACY_CONFIGDIR)} ] && echo ${shellQuote(LEGACY_CONFIGDIR)} || true`);
@@ -2043,6 +2144,12 @@ async function refreshConfig() {
 		legacyModuleText,
 		sysDenyUids,
 		sysResolvedCount,
+		procguardConfText,
+		procguardModuleText,
+		procguardKoInfo,
+		procguardHits,
+		procguardMissed,
+		procguardGid,
 		koInfo,
 		moduleFlags,
 		legacyConfigInfo,
@@ -2052,6 +2159,7 @@ async function refreshConfig() {
 
 	await refreshTargetProbe();
 	updateSummary(lastSnapshot);
+	renderProcguard(lastSnapshot);
 	updateAutoSceneDebugfsStatus(lastSnapshot);
 	updateHealthList();
 	scheduleBootPolling(lastSnapshot.bootState);
@@ -2511,7 +2619,7 @@ async function reloadModule() {
 	await writeLines(files.waitSeconds, [String(currentWaitSeconds())]);
 	statusText.textContent = "正在热重载...";
 	const output = await execShell(
-		`rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
+		`if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
 	);
 	setLogContent("kernel", output);
 	await refreshDiagnostics();
@@ -2529,7 +2637,7 @@ async function reloadModule() {
 
 async function pauseHiding() {
 	const output = await execShell(
-		`touch ${shellQuote(files.sceneDebugfsWatchStop)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; log -p i -t pathmask 'hidden paths paused from WebUI'; printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask unloaded'; else printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask is not loaded'; fi; dmesg | grep -Ei 'pathmask|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
+		`touch ${shellQuote(files.sceneDebugfsWatchStop)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; log -p i -t pathmask 'hidden paths paused from WebUI'; printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask unloaded'; else printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask is not loaded'; fi; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
 	);
 	setLogContent("kernel", output);
 	await refreshDiagnostics();
@@ -2571,12 +2679,14 @@ getprop ro.build.version.release 2>/dev/null || true
 getprop ro.product.manufacturer 2>/dev/null || true
 getprop ro.product.device 2>/dev/null || true
 echo '--- modules ---'
-grep -E '^(pathmask|nohello) ' /proc/modules 2>/dev/null || true
+grep -E '^(pathmask|procguard|nohello) ' /proc/modules 2>/dev/null || true
 echo '--- module files ---'
 ls -l ${shellQuote(MODDIR)} 2>/dev/null || true
 ls -l ${shellQuote(LEGACY_MODDIR)} 2>/dev/null || true
 echo '--- sysfs parameters ---'
 for f in /sys/module/pathmask/parameters/*; do [ -f "$f" ] && echo "$(basename "$f")=$(cat "$f" 2>/dev/null)"; done
+echo '--- procguard parameters ---'
+for f in /sys/module/procguard/parameters/*; do [ -f "$f" ] && echo "$(basename "$f")=$(cat "$f" 2>/dev/null)"; done
 echo '--- load failure guard ---'
 [ -f ${shellQuote(files.failCount)} ] && echo "load_fail_count=$(cat ${shellQuote(files.failCount)} 2>/dev/null)" || echo "load_fail_count=0"
 [ -f ${shellQuote(files.failReason)} ] && echo "load_fail_reason=$(cat ${shellQuote(files.failReason)} 2>/dev/null)"
@@ -2863,6 +2973,10 @@ $("#refreshBtn").addEventListener("click", () => runAction("正在刷新...", re
 // toggle is flipped, so it visibly tracks the dependency without waiting
 // for the next refresh.
 $("#enableSyscallHooksInput").addEventListener("change", updateSyscallHooksDisabledState);
+$("#procguardEnableInput").addEventListener("change", () => {
+	const enable = $("#procguardEnableInput").checked;
+	runAction(enable ? "正在启用隔离防护..." : "正在停用隔离防护...", () => setProcguardEnabled(enable)).catch(() => refreshConfig());
+});
 $("#autoSceneDebugfsInput").addEventListener("change", () => {
 	const enabled = $("#autoSceneDebugfsInput").checked;
 	const node = $("#autoSceneDebugfsStatus");

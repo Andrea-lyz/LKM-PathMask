@@ -6,6 +6,8 @@ LEGACY_MODULE_ID=nohello-demo
 LOG_TAG=pathmask
 KO_NAME=pathmask.ko
 KO_PATH="$MODDIR/$KO_NAME"
+PROC_GUARD_KO_NAME=procguard.ko
+PROC_GUARD_KO_PATH="$MODDIR/$PROC_GUARD_KO_NAME"
 SCENE_WATCH_SCRIPT="$MODDIR/scene-debugfs-watch.sh"
 SCENE_PACKAGE="com.omarea.vtools"
 PERSIST_DIR="/data/adb/pathmask"
@@ -26,6 +28,7 @@ MOD_WAIT_SECONDS_CONFIG="$MODDIR/wait_seconds.conf"
 MOD_ENABLE_SYSCALL_HOOKS_CONFIG="$MODDIR/enable_syscall_hooks.conf"
 MOD_SYSCALL_HOOKS_CONFIG="$MODDIR/syscall_hooks.conf"
 MOD_AUTO_SCENE_DEBUGFS_CONFIG="$MODDIR/auto_scene_debugfs.conf"
+MOD_PROC_GUARD_CONFIG="$MODDIR/procguard.conf"
 
 CONFIG_PATH="$PERSIST_DIR/target_path.conf"
 HIDE_DIRENTS_CONFIG="$PERSIST_DIR/hide_dirents.conf"
@@ -39,6 +42,7 @@ WAIT_SECONDS_CONFIG="$PERSIST_DIR/wait_seconds.conf"
 ENABLE_SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/enable_syscall_hooks.conf"
 SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/syscall_hooks.conf"
 AUTO_SCENE_DEBUGFS_CONFIG="$PERSIST_DIR/auto_scene_debugfs.conf"
+PROC_GUARD_CONFIG="$PERSIST_DIR/procguard.conf"
 SCENE_DEBUGFS_PATHS_PATH="$PERSIST_DIR/scene_debugfs_paths"
 SCENE_DEBUGFS_STATE_PATH="$PERSIST_DIR/scene_debugfs_state"
 SCENE_WATCH_STOP_PATH="$PERSIST_DIR/scene_debugfs_watch.stop"
@@ -311,6 +315,7 @@ init_persistent_config() {
 		ENABLE_SYSCALL_HOOKS_CONFIG="$MOD_ENABLE_SYSCALL_HOOKS_CONFIG"
 		SYSCALL_HOOKS_CONFIG="$MOD_SYSCALL_HOOKS_CONFIG"
 		AUTO_SCENE_DEBUGFS_CONFIG="$MOD_AUTO_SCENE_DEBUGFS_CONFIG"
+		PROC_GUARD_CONFIG="$MOD_PROC_GUARD_CONFIG"
 		return
 	fi
 
@@ -361,6 +366,7 @@ init_persistent_config() {
 	seed_config_file "$ENABLE_SYSCALL_HOOKS_CONFIG" "$MOD_ENABLE_SYSCALL_HOOKS_CONFIG" "1"
 	seed_config_file "$SYSCALL_HOOKS_CONFIG" "$MOD_SYSCALL_HOOKS_CONFIG" "newfstatat,statx,faccessat2,readlinkat,openat,openat2"
 	seed_config_file "$AUTO_SCENE_DEBUGFS_CONFIG" "$MOD_AUTO_SCENE_DEBUGFS_CONFIG" "0"
+	seed_config_file "$PROC_GUARD_CONFIG" "$MOD_PROC_GUARD_CONFIG" "0"
 
 	# Existing installs from v2.2.8 - v2.3.1 shipped enable_syscall_hooks=0
 	# as a defensive default (Holmes 04 mitigation pre-bisect). Now that the
@@ -1404,6 +1410,21 @@ if ! any_target_exists; then
 fi
 if [ "$AUTO_SCENE_DEBUGFS" = "1" ] && [ "$SCENE_DEBUGFS_COUNT" -gt 0 ]; then
 	write_scene_debugfs_state "found" "0" "discovered $SCENE_DEBUGFS_COUNT matching mount(s) before insmod"
+fi
+
+# procguard companion module: strips the gid 3009 (AID_READPROC) /proc
+# bypass from Android isolated processes (LSPosed Privisolated). Opt-in
+# via procguard.conf (default 0, toggled from the WebUI); this script
+# seeds the persistent copy from the module-bundled default on first
+# boot and honours the persistent copy afterwards.
+if [ -f "$PROC_GUARD_KO_PATH" ] && [ "$(head -n 1 "$PROC_GUARD_CONFIG" 2>/dev/null | tr -d ' ')" = "1" ]; then
+	if grep -q '^procguard ' /proc/modules 2>/dev/null; then
+		log_i "procguard already loaded, skip"
+	elif insmod "$PROC_GUARD_KO_PATH"; then
+		log_i "loaded $PROC_GUARD_KO_PATH"
+	else
+		log_e "failed to load $PROC_GUARD_KO_PATH (continuing anyway)"
+	fi
 fi
 
 if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS"; then

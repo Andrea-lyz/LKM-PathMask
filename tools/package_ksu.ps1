@@ -18,6 +18,7 @@
 [CmdletBinding()]
 param(
     [string]$KoPath = "kernel\pathmask.ko",
+    [string]$ProcguardKoPath = "",
     [string]$Output = "out\pathmask-ksu.zip",
     [string]$TargetPath,
     [ValidateSet("0", "1")]
@@ -73,6 +74,19 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Output) | Out-Nul
 
 Copy-Item -Path (Join-Path $TemplateDir "*") -Destination $StageDir -Recurse -Force
 Copy-Item -LiteralPath $KoPath -Destination (Join-Path $StageDir "pathmask.ko") -Force
+
+# Optional procguard companion ko (isolated-process gid-3009 strip).
+# Bundled only when explicitly supplied; service.sh tolerates its
+# absence and the WebUI then shows the protection as unavailable.
+if ($ProcguardKoPath) {
+    if (-not [System.IO.Path]::IsPathRooted($ProcguardKoPath)) {
+        $ProcguardKoPath = Join-Path $RepoRoot $ProcguardKoPath
+    }
+    if (-not (Test-Path -LiteralPath $ProcguardKoPath)) {
+        throw "Missing procguard kernel module: $ProcguardKoPath"
+    }
+    Copy-Item -LiteralPath $ProcguardKoPath -Destination (Join-Path $StageDir "procguard.ko") -Force
+}
 
 $ModulePropPath = Join-Path $StageDir "module.prop"
 
