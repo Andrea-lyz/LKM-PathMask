@@ -1,3 +1,8 @@
+# PathMask 2.7.1
+
+- **修复 FUSE 目标 ino=0 导致的误伤**。开机时 FUSE 挂载（如 `/storage/emulated/0`）下的目标目录可能尚未被 daemon 物化，insmod 解析出 `i_ino=0`，模块把 `(ino=0, 设备)` 注册为目标特征，导致同一挂载上所有未物化的 inode（黑名单应用新建的缓存文件等）都被当作隐藏目标拦截——表现为 QQ 等应用加载图片/写共享存储失败。修复后 `ino=0` 的目标不再参与 inode 级匹配（inode_permission / vfs_getattr / getdents 过滤），仅由路径字符串钩子隐藏；黑名单应用正常读写不受影响，stat / open 的隐藏语义不变。
+- 内核模块、WebUI、配置格式无其他变化；已更新到 2.7.0 的用户会收到本次修复的更新推送。
+
 # PathMask 2.7.0
 
 ## 解决了什么
