@@ -508,6 +508,7 @@ static void discover_storage_aliases(void)
 	struct path path;
 	dev_t canon_dev = 0;
 	unsigned long long canon_ino = 0;
+	bool canon_set = false;
 	unsigned int i;
 
 	pm_storage_root_count = 0;
@@ -530,9 +531,10 @@ static void discover_storage_aliases(void)
 			continue;
 		}
 
-		if (canon_dev == 0 && canon_ino == 0) {
+		if (!canon_set) {
 			canon_dev = inode->i_sb->s_dev;
 			canon_ino = inode->i_ino;
+			canon_set = true;
 		} else if (inode->i_sb->s_dev != canon_dev ||
 			   inode->i_ino != canon_ino) {
 			pm_invoke_path_put(&path);
@@ -551,6 +553,11 @@ static void discover_storage_aliases(void)
 	if (pm_storage_root_count > 1) {
 		pr_info(PM_LOG_PREFIX "%u storage alias root(s) active\n",
 			pm_storage_root_count - 1);
+	}
+	if (pm_storage_root_count == 0) {
+		pr_warn(PM_LOG_PREFIX
+			"no shared-storage alias root resolved (count=%u)\n",
+			pm_storage_root_count);
 	}
 }
 
@@ -592,11 +599,14 @@ static int add_target_path(const char *path_name)
 	for (i = 0; i < pm_storage_root_count; i++) {
 		size_t rlen = pm_storage_roots[i].len;
 
-		if (strncmp(path_name, pm_storage_roots[i].path, rlen) == 0) {
+		if (strncmp(targets[target_count].path,
+			    pm_storage_roots[i].path, rlen) == 0 &&
+		    (!targets[target_count].path[rlen] ||
+		     targets[target_count].path[rlen] == '/')) {
 			targets[target_count].under_storage = true;
 			targets[target_count].storage_suffix_off = rlen;
 			targets[target_count].storage_suffix_len =
-				strlen(path_name) - rlen;
+				strlen(targets[target_count].path) - rlen;
 			break;
 		}
 	}
