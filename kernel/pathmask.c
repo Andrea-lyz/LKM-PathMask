@@ -163,6 +163,14 @@ struct hidden_target {
 	dev_t dev;
 	unsigned long long ino;
 	char path[TARGET_TEXT_LEN];
+	/*
+	 * False when the inode was not materialised at insmod time
+	 * (i_ino == 0, happens on FUSE before the daemon fills the
+	 * node). Matching by (ino=0, dev) would hit every not-yet-
+	 * materialised inode on that filesystem, so such targets are
+	 * hidden via the path-based syscall hooks only.
+	 */
+	bool inode_ok;
 };
 
 static struct hidden_target targets[MAX_HIDE_TARGETS];
@@ -284,6 +292,8 @@ static inline bool is_target_inode(const struct inode *inode)
 		return false;
 
 	for (i = 0; i < target_count; i++) {
+		if (!targets[i].inode_ok)
+			continue;
 		if (inode->i_ino == targets[i].ino &&
 		    inode->i_sb->s_dev == targets[i].dev)
 			return true;
@@ -297,6 +307,8 @@ static inline bool is_target_ino(__u64 ino)
 	unsigned int i;
 
 	for (i = 0; i < target_count; i++) {
+		if (!targets[i].inode_ok)
+			continue;
 		if (ino == (__u64)targets[i].ino)
 			return true;
 	}
@@ -487,6 +499,7 @@ static int add_target_path(const char *path_name)
 
 	targets[target_count].ino = inode->i_ino;
 	targets[target_count].dev = inode->i_sb->s_dev;
+	targets[target_count].inode_ok = inode->i_ino != 0;
 	strscpy(targets[target_count].path, path_name,
 		sizeof(targets[target_count].path));
 	pr_info(PM_LOG_PREFIX "target[%u] %s ino=%llu dev=%u:%u\n",
