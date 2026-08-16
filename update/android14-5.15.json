@@ -1,6 +1,6 @@
 {
-    "version":  "2.7.1",
-    "versionCode":  54,
-    "zipUrl":  "https://github.com/Andrea-lyz/LKM-PathMask/releases/download/v2.7.1/android14-5.15_pathmask-ksu.zip",
+    "version":  "2.7.2",
+    "versionCode":  55,
+    "zipUrl":  "https://github.com/Andrea-lyz/LKM-PathMask/releases/download/v2.7.2/android14-5.15_pathmask-ksu.zip",
     "changelog":  "https://raw.githubusercontent.com/Andrea-lyz/LKM-PathMask/main/update/changelog.md"
 }
