@@ -4,8 +4,8 @@
  *
  * The module stores target identities as (dev, inode) pairs and makes matching
  * paths appear absent to selected UIDs or globally. Target resolution uses
- * kprobe-resolved kern_path()/path_put() pointers so the .ko does not import
- * OEM-pruned VFS helper exports directly.
+ * kern_path()/path_put() resolved through KallRecon so the .ko does not
+ * import OEM-pruned VFS helper exports directly.
  */
 
 #include <linux/module.h>
@@ -25,6 +25,8 @@
 #include <linux/uaccess.h>
 #include <asm/syscall.h>
 #include <asm/unistd.h>
+
+#include "core.h"
 
 #define PM_LOG_PREFIX "pathmask: "
 #define MAX_HIDE_TARGETS 64
@@ -238,11 +240,11 @@ static pm_close_fd_t pm_close_fd;
 
 /*
  * On Android GKI builds with CONFIG_CFI_CLANG=y the indirect call below
- * would otherwise be checked against the CFI jump table. kprobe gives us
+ * would otherwise be checked against the CFI jump table. kallsyms gives us
  * the raw function body address (not the jump-table entry), so the call
  * fails CFI verification and the kernel panics silently before pstore
  * can persist the trace. Wrap the indirect calls in __nocfi helpers so
- * only these two sites bypass the type-id check; the rest of the module
+ * only these sites bypass the type-id check; the rest of the module
  * keeps full CFI coverage.
  */
 #ifndef __nocfi
@@ -267,39 +269,35 @@ static int __nocfi pm_invoke_close_fd(unsigned int fd)
 	return pm_close_fd(fd);
 }
 
-static unsigned long resolve_kernel_symbol_addr(const char *symbol_name)
+static unsigned long __nocfi pm_resolve(const char *name)
 {
-	struct kprobe kp = {
-		.symbol_name = symbol_name,
-	};
 	unsigned long addr;
-	int ret;
 
-	ret = register_kprobe(&kp);
-	if (ret) {
-		pr_warn(PM_LOG_PREFIX "resolve %s failed: %d\n",
-			symbol_name, ret);
-		return 0;
-	}
-
-	addr = (unsigned long)kp.addr;
-	unregister_kprobe(&kp);
-
+	addr = kallrecon_klp(name);
 	if (!addr)
-		pr_warn(PM_LOG_PREFIX "resolve %s returned NULL\n",
-			symbol_name);
+		addr = kallsyms_name_to_addr(name);
 
 	return addr;
+}
+
+static int pm_symrecon_init(void)
+{
+	find_kallsyms_base();
+	if (!klnum_val || !kallrecon_klp) {
+		pr_err(PM_LOG_PREFIX "kallsyms recovery failed\n");
+		return -ENODATA;
+	}
+
+	pr_info(PM_LOG_PREFIX "kallsyms ready, %u symbols\n", klnum_val);
+	return 0;
 }
 
 static int resolve_path_helpers(void)
 {
 	if (!pm_kern_path)
-		pm_kern_path = (pm_kern_path_t)
-			resolve_kernel_symbol_addr("kern_path");
+		pm_kern_path = (pm_kern_path_t) pm_resolve("kern_path");
 	if (!pm_path_put)
-		pm_path_put = (pm_path_put_t)
-			resolve_kernel_symbol_addr("path_put");
+		pm_path_put = (pm_path_put_t) pm_resolve("path_put");
 
 	if (!pm_kern_path || !pm_path_put)
 		return -ENOENT;
@@ -311,10 +309,9 @@ static int resolve_path_helpers(void)
 	 * we just don't hook openat at all.
 	 */
 	if (!pm_close_fd)
-		pm_close_fd = (pm_close_fd_t)
-			resolve_kernel_symbol_addr("close_fd");
+		pm_close_fd = (pm_close_fd_t) pm_resolve("close_fd");
 
-	pr_info(PM_LOG_PREFIX "resolved VFS path helpers via kprobe\n");
+	pr_info(PM_LOG_PREFIX "resolved VFS path helpers via kallsyms\n");
 	return 0;
 }
 
@@ -799,7 +796,7 @@ static int getattr_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
  *
  * For openat / openat2 we additionally have to release the fd that the
  * syscall body already allocated before we override the return value to
- * -ENOENT. That requires close_fd(), resolved earlier via kprobe.
+ * -ENOENT. That requires close_fd(), resolved earlier through kallsyms.
  */
 struct syscall_match_data {
 	bool matched;
@@ -1487,6 +1484,10 @@ static int __init pathmask_init(void)
 {
 	const char *paths = target_paths[0] ? target_paths : target_path;
 	int ret;
+
+	ret = pm_symrecon_init();
+	if (ret)
+		return ret;
 
 	ret = parse_scope_mode();
 	if (ret)
