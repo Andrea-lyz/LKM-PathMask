@@ -29,29 +29,45 @@ jobs:
     - name: Checkout source code
       uses: actions/checkout@v6
 
+    - name: Fetch deps (KMSDK + KallRecon)
+      run: |
+        cd kernel
+
+        echo "=== Fetching deps at the revs pinned in kernel/deps.lst ==="
+
+        # registry urls are ssh, rewrite so the runner needs no deploy key
+        git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+        sh scripts/fetch-deps.sh
+
+        echo "=== Deps deployed ==="
+        ls -la deps/ deps/KallRecon/lib/
+
     - name: Build pathmask.ko
       run: |
         cd kernel
 
         echo "=== Building pathmask.ko for KMI: ${{ inputs.kmi }} ==="
 
-        CONFIG_KSU=m CC=clang make
+        CONFIG_KSU=m CC=clang make VER="${{ inputs.kmi }}"
 
         echo "=== Build completed ==="
 
+        KO_DIR="out/${{ inputs.kmi }}"
+
         mkdir -p /github/workspace/out
         OUTPUT_NAME="${{ inputs.kmi }}_pathmask.ko"
-        cp pathmask.ko "/github/workspace/out/$OUTPUT_NAME"
+        cp "$KO_DIR/pathmask.ko" "/github/workspace/out/$OUTPUT_NAME"
 
         echo "Copied to: /github/workspace/out/$OUTPUT_NAME"
         ls -la "/github/workspace/out/$OUTPUT_NAME"
         llvm-strip -d "/github/workspace/out/$OUTPUT_NAME"
         echo "Size after stripping: $(du -h "/github/workspace/out/$OUTPUT_NAME" | cut -f1)"
 
-        # procguard.ko only exists on branches that add it to kernel/Kbuild;
+        # procguard.ko only exists on branches that add it to kernel/Makefile;
         # keep this conditional so main builds (without procguard) still pass.
-        if [ -f procguard.ko ]; then
-          cp procguard.ko "/github/workspace/out/${{ inputs.kmi }}_procguard.ko"
+        if [ -f "$KO_DIR/procguard.ko" ]; then
+          cp "$KO_DIR/procguard.ko" "/github/workspace/out/${{ inputs.kmi }}_procguard.ko"
           llvm-strip -d "/github/workspace/out/${{ inputs.kmi }}_procguard.ko"
         fi
 
