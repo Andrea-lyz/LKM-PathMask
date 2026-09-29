@@ -17,7 +17,7 @@
 # correct.
 [CmdletBinding()]
 param(
-    [string]$KoPath = "kernel\pathmask.ko",
+    [string]$KoPath = "",
     [string]$ProcguardKoPath = "",
     [string]$Output = "out\pathmask-ksu.zip",
     [string]$TargetPath,
@@ -48,6 +48,22 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $TemplateDir = Join-Path $RepoRoot "ksu-module"
 $StageDir = Join-Path $RepoRoot "out\ksu-stage"
+$KmiTag = ""
+
+# Without an explicit -KoPath, prefer the newest KMI build under
+# kernel\out\<kmi>\ and fall back to the legacy flat kernel\pathmask.ko
+# so both the module tree layout and old checkouts keep working.
+if (-not $KoPath) {
+    $Discovered = Get-ChildItem -Path (Join-Path $RepoRoot "kernel\out") -Filter "pathmask.ko" -Recurse -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($Discovered) {
+        $KoPath = $Discovered.FullName
+        $KmiTag = Split-Path -Leaf (Split-Path -Parent $KoPath)
+    } else {
+        $KoPath = "kernel\pathmask.ko"
+    }
+}
 
 if (-not [System.IO.Path]::IsPathRooted($KoPath)) {
     $KoPath = Join-Path $RepoRoot $KoPath
@@ -91,7 +107,8 @@ if ($ProcguardKoPath) {
 $ModulePropPath = Join-Path $StageDir "module.prop"
 
 # If the caller didn't pass -UpdateJson, derive a default from the
-# ko filename's KMI prefix so module.prop always has the field. KSU
+# ko filename's KMI prefix or from the kernel\out\<kmi>\ directory the
+# ko was discovered in so module.prop always has the field. KSU
 # manager treats absence of `updateJson=` as "module never publishes
 # updates", which silently breaks the in-app update prompt -- worth
 # defaulting to the canonical raw URL even for ad-hoc local builds,
@@ -101,6 +118,8 @@ if (-not $PSBoundParameters.ContainsKey('UpdateJson')) {
     $KoBase = [System.IO.Path]::GetFileNameWithoutExtension($KoPath)
     if ($KoBase -match '^(android\d+-\d+\.\d+)_pathmask$') {
         $KmiTag = $Matches[1]
+    }
+    if ($KmiTag -match '^android\d+-\d+\.\d+$') {
         $UpdateJson = "https://raw.githubusercontent.com/Andrea-lyz/LKM-PathMask/main/update/${KmiTag}.json"
     }
 }

@@ -29,23 +29,11 @@ jobs:
     - name: Checkout source code
       uses: actions/checkout@v6
 
-    - name: Fetch deps (KMSDK + KallRecon)
-      run: |
-        cd kernel
-
-        echo "=== Fetching deps at the revs pinned in kernel/deps.lst ==="
-
-        # registry urls are ssh, rewrite so the runner needs no deploy key
-        git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-        sh scripts/fetch-deps.sh
-
-        echo "=== Deps deployed ==="
-        ls -la deps/ deps/KallRecon/lib/
-
     - name: Build pathmask.ko
       run: |
         cd kernel
+
+        sh scripts/fetch-deps.sh
 
         echo "=== Building pathmask.ko for KMI: ${{ inputs.kmi }} ==="
 
