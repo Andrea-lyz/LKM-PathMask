@@ -25,8 +25,9 @@ responsibility for any account or hardware consequences.
 
 ## What It Builds
 
-- `kernel/pathmask.c`: kernel module source.
-- `kernel/Kbuild`: external module target.
+- `kernel/src/pathmask.c`: kernel module source.
+- `kernel/Makefile`: external module targets and per-KMI output directories.
+- `kernel/deps.lst` and `kernel/.sdk-version`: pinned KallRecon and KMSDK commits.
 - `ksu-module/`: KernelSU module wrapper and WebUI.
 - `tools/package_ksu.ps1` and `tools/package_ksu.sh`: packaging helpers.
 - `.github/workflows/`: CI builds for Android KMI targets and release uploads.
@@ -70,8 +71,8 @@ Implemented:
   default off) that neutralizes the leaked gid 3009 (AID_READPROC) for Android
   isolated UIDs, closing the LSPosed Privisolated /proc-enumeration vector.
 - Avoids importing `kern_path()` / `path_put()` directly. Target resolution
-  resolves those helper addresses through kprobes so OEM kernels that prune
-  unused VFS helper exports are less likely to reject the module.
+  resolves those helper addresses through KallRecon, avoiding direct imports
+  of OEM-pruned VFS helpers and of `register_kprobe()` on GKI 5.10.
 
 Known limitations:
 
@@ -118,25 +119,42 @@ the wrong KMI package. Version releases are also mirrored to `pathmask-latest`.
 
 ## Local Build
 
-If your DDK container exports `KDIR`:
+With Docker, build a specific KMI using the same DDK release as CI:
+
+```sh
+sh kernel/scripts/build-ddkk.sh android15-6.6
+```
+
+The script fetches and verifies pinned dependencies before cleaning and building.
+Set `DDK_RELEASE` to override the default `20260828` image release.
+
+If your DDK container already exports `KDIR`:
 
 ```sh
 cd kernel
-CONFIG_KSU=m CC=clang make
+sh scripts/fetch-deps.sh
+CONFIG_KSU=m CC=clang make VER=android15-6.6
 ```
 
 With an explicit kernel build directory:
 
 ```sh
 cd kernel
-make KDIR=/path/to/kernel/build
+sh scripts/fetch-deps.sh
+make KDIR=/path/to/kernel/build VER=android15-6.6
 ```
 
 The output is:
 
 ```text
-kernel/pathmask.ko
+kernel/out/android15-6.6/pathmask.ko
+kernel/out/android15-6.6/procguard.ko
 ```
+
+Replace the example KMI with your target. Omitting `VER` uses `kernel/out/local/`
+and does not automatically select an update channel. Dependency checkouts must
+be clean and match the full SHAs in `deps.lst`; a mismatch is reported without
+overwriting local changes. `make format` only formats project sources in `src/`.
 
 ## Manual Test
 
@@ -184,31 +202,37 @@ rmmod pathmask
 Windows PowerShell:
 
 ```powershell
-.\tools\package_ksu.ps1 -KoPath .\kernel\pathmask.ko -Output .\out\pathmask-ksu.zip
+.\tools\package_ksu.ps1 -KoPath .\kernel\out\android15-6.6\pathmask.ko -ProcguardKoPath .\kernel\out\android15-6.6\procguard.ko -Output .\out\pathmask-ksu.zip
 ```
 
 Linux/macOS shell:
 
 ```sh
-./tools/package_ksu.sh kernel/pathmask.ko out/pathmask-ksu.zip
+sh tools/package_ksu.sh kernel/out/android15-6.6/pathmask.ko out/pathmask-ksu.zip
 ```
+
+Both scripts derive the update channel from the selected file's KMI-prefixed
+name or parent KMI directory. Without a module path they select the newest
+build, falling back to the legacy `kernel/pathmask.ko`; specify a path when
+multiple KMIs exist. The shell script includes a sibling `procguard.ko`
+automatically; PowerShell includes it when `-ProcguardKoPath` is supplied.
 
 Override target paths:
 
 ```powershell
-.\tools\package_ksu.ps1 -KoPath .\kernel\pathmask.ko -Output .\out\pathmask-ksu.zip -TargetPath "/data/local/tmp/a,/data/local/tmp/b"
+.\tools\package_ksu.ps1 -KoPath .\kernel\out\android15-6.6\pathmask.ko -Output .\out\pathmask-ksu.zip -TargetPath "/data/local/tmp/a,/data/local/tmp/b"
 ```
 
 Direct-access-only package:
 
 ```powershell
-.\tools\package_ksu.ps1 -KoPath .\kernel\pathmask.ko -Output .\out\pathmask-direct.zip -TargetPath "/data/local/tmp/pathmask" -HideDirents 0
+.\tools\package_ksu.ps1 -KoPath .\kernel\out\android15-6.6\pathmask.ko -Output .\out\pathmask-direct.zip -TargetPath "/data/local/tmp/pathmask" -HideDirents 0
 ```
 
 Blacklist package:
 
 ```powershell
-.\tools\package_ksu.ps1 -KoPath .\kernel\pathmask.ko -Output .\out\pathmask-ksu.zip -ScopeMode deny -DenyPackage "com.example.detector"
+.\tools\package_ksu.ps1 -KoPath .\kernel\out\android15-6.6\pathmask.ko -Output .\out\pathmask-ksu.zip -ScopeMode deny -DenyPackage "com.example.detector"
 ```
 
 ## Runtime Config Files
@@ -339,19 +363,21 @@ ln -sf vmlinux.symvers Module.symvers
 
 # 5. Build pathmask.ko
 cd /path/to/lkm-build-OP13/kernel
-KDIR=/path/to/kernel-source make ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1
+sh scripts/fetch-deps.sh
+KDIR=/path/to/kernel-source make VER=local ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1
 
 # 6. Verify
-modinfo pathmask.ko | grep vermagic
-llvm-readelf -SW pathmask.ko | grep __versions  # size must be non-zero
+modinfo out/local/pathmask.ko | grep vermagic
+llvm-readelf -SW out/local/pathmask.ko | grep __versions  # size must be non-zero
 ```
 
-Package the resulting `pathmask.ko` with `tools/package_ksu.ps1` or
-`tools/package_ksu.sh` to create a KernelSU-installable zip.
+Package `kernel/out/local/pathmask.ko` with `tools/package_ksu.ps1` or
+`tools/package_ksu.sh`. A `local` build has no inferred update channel; use the
+device's actual KMI as `VER` if you want the matching standard update channel.
 
 ## Use Your Own Module
 
-Replace `kernel/pathmask.c` and update `kernel/Kbuild`.
+Replace `kernel/src/pathmask.c` and update `kernel/Makefile`.
 
 Single source file:
 

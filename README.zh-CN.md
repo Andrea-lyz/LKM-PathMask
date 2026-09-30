@@ -297,16 +297,47 @@ Scene debugfs 自动识别开关，默认 `0`（关闭）。开启后，启动�
 Windows PowerShell：
 
 ```powershell
-.\tools\package_ksu.ps1 -KoPath .\kernel\pathmask.ko -Output .\out\pathmask-ksu.zip
+.\tools\package_ksu.ps1 -KoPath .\kernel\out\android15-6.6\pathmask.ko -ProcguardKoPath .\kernel\out\android15-6.6\procguard.ko -Output .\out\pathmask-ksu.zip
 ```
 
 指定隐藏路径：
 
 ```powershell
-.\tools\package_ksu.ps1 -KoPath .\kernel\pathmask.ko -Output .\out\pathmask-ksu.zip -TargetPath "/dev/scene,/system_ext/app/SoterService"
+.\tools\package_ksu.ps1 -KoPath .\kernel\out\android15-6.6\pathmask.ko -Output .\out\pathmask-ksu.zip -TargetPath "/dev/scene,/system_ext/app/SoterService"
 ```
 
+Linux / WSL：
+
+```sh
+sh tools/package_ksu.sh kernel/out/android15-6.6/pathmask.ko out/pathmask-ksu.zip
+```
+
+示例中的 KMI 要替换成设备实际的 KMI。两套脚本都会从文件名的 KMI 前缀或父目录
+识别更新通道，显式指定路径也一样生效。不指定 ko 时会选择最新构建，因此有多个 KMI
+产物时建议明确指定。Shell 自动包含同目录的 `procguard.ko`；PowerShell 需传入
+`-ProcguardKoPath`。默认配置仍来自 `ksu-module/`，只有明确传入的参数才会覆盖。
+
 ## 自己从源码编译
+
+已有 Docker 时，可以直接使用和 CI 相同版本的 DDK：
+
+```sh
+sh kernel/scripts/build-ddkk.sh android15-6.6
+```
+
+脚本先拉取并校验固定依赖，再清理和构建该 KMI，产物放在
+`kernel/out/android15-6.6/`。默认 DDK 镜像版本是 `20260828`，
+可用 `DDK_RELEASE` 环境变量覆盖。已在 DDK 内或已有内核构建目录时：
+
+```sh
+cd kernel
+sh scripts/fetch-deps.sh
+CONFIG_KSU=m CC=clang make KDIR=/path/to/kernel/build VER=android15-6.6
+```
+
+不传 `VER` 时使用 `out/local/`，不会自动设置标准 KMI 更新通道。
+`deps.lst` 和 `.sdk-version` 使用完整提交 SHA；依赖目录版本不符或有本地修改时
+会报错并保留现场，不会覆盖修改。`make format` 只处理 `src/` 中的自主源码。
 
 如果发布的 ko 跟你的设备内核不兼容（例如 `disagrees about version of symbol module_layout`），可以用厂商开源的内核源码自己编一份精确兼容的 ko。
 
@@ -337,11 +368,14 @@ ln -sf vmlinux.symvers Module.symvers
 
 # 5. 编 pathmask.ko
 cd /path/to/lkm-build-OP13/kernel
-KDIR=/path/to/kernel-source make ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1
+sh scripts/fetch-deps.sh
+KDIR=/path/to/kernel-source make VER=local ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1
 
 # 6. 验证
-modinfo pathmask.ko | grep vermagic
-llvm-readelf -SW pathmask.ko | grep __versions  # 大小应非零
+modinfo out/local/pathmask.ko | grep vermagic
+llvm-readelf -SW out/local/pathmask.ko | grep __versions  # 大小应非零
 ```
 
-编出来的 ko 用 `tools/package_ksu.ps1` 打包成 KSU zip 即可安装。
+将 `kernel/out/local/pathmask.ko` 用 `tools/package_ksu.ps1` 或
+`tools/package_ksu.sh` 打包成 KSU zip。`local` 不自动设置更新通道；
+若需要对应的标准更新通道，构建时将 `VER` 改为设备实际 KMI。

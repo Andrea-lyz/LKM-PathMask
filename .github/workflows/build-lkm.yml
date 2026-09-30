@@ -14,6 +14,17 @@ permissions:
   packages: read
 
 jobs:
+  test-tools:
+    name: Validate build and packaging tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test shell packaging, dependency pins, and local build wrapper
+        run: sh tools/tests/test-build-tools.sh
+      - name: Test PowerShell packaging and bundled defaults
+        shell: pwsh
+        run: ./tools/tests/test-packaging.ps1
+
   build-lkm:
     strategy:
       matrix:
@@ -33,7 +44,7 @@ jobs:
 
   publish-release:
     name: Publish module zips to GitHub Release
-    needs: build-lkm
+    needs: [test-tools, build-lkm]
     # Only main / v* tags publish a Release. Dev branches (dev/**) and
     # pull requests still get build artifacts via actions/upload-artifact
     # but never push a Release that would notify end users.

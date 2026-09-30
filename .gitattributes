@@ -16,3 +16,5 @@ ksu-module/*.sh text eol=lf
 tools/*.sh text eol=lf
 Makefile text eol=lf
 Kbuild text eol=lf
+*.lst text eol=lf
+kernel/.sdk-version text eol=lf

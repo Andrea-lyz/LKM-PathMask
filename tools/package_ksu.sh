@@ -49,9 +49,7 @@ KMI_TAG=""
 # so both the module tree layout and old checkouts keep working.
 if [ -z "$KO_PATH" ]; then
 	KO_PATH=$(ls -t "$REPO_ROOT"/kernel/out/*/pathmask.ko 2>/dev/null | head -n 1 || true)
-	if [ -n "$KO_PATH" ]; then
-		KMI_TAG=$(basename "$(dirname -- "$KO_PATH")")
-	else
+	if [ -z "$KO_PATH" ]; then
 		KO_PATH=kernel/pathmask.ko
 	fi
 fi
@@ -67,8 +65,8 @@ case "$OUTPUT" in
 esac
 
 # If the caller didn't set UPDATE_JSON_URL, derive one from the ko
-# filename's KMI prefix or from the kernel/out/<kmi>/ directory the ko
-# was discovered in so the resulting zip always advertises an update
+# filename's KMI prefix or its parent directory, for both explicit
+# paths and automatically discovered builds. This advertises an update
 # channel. KSU manager skips update detection entirely when
 # `updateJson=` is missing from module.prop, which silently breaks
 # in-app updates for ad-hoc local builds. To opt out, set
@@ -80,12 +78,13 @@ if [ -z "$UPDATE_JSON_URL" ] && [ -z "${NO_UPDATE_JSON:-}" ]; then
 		android*_pathmask)
 			KMI_TAG="${KO_BASE%_pathmask}"
 			;;
-	esac
-	case "$KMI_TAG" in
-		android*-[0-9]*.[0-9]*)
-			UPDATE_JSON_URL="https://raw.githubusercontent.com/Andrea-lyz/LKM-PathMask/main/update/${KMI_TAG}.json"
+		pathmask)
+			KMI_TAG=$(basename "$(CDPATH= cd -- "$(dirname -- "$KO_PATH")" && pwd)")
 			;;
 	esac
+	if printf '%s\n' "$KMI_TAG" | LC_ALL=C grep -Eq '^android[0-9]+-[0-9]+\.[0-9]+$'; then
+		UPDATE_JSON_URL="https://raw.githubusercontent.com/Andrea-lyz/LKM-PathMask/main/update/${KMI_TAG}.json"
+	fi
 fi
 
 if [ ! -f "$KO_PATH" ]; then

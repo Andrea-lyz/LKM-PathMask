@@ -59,7 +59,6 @@ if (-not $KoPath) {
         Select-Object -First 1
     if ($Discovered) {
         $KoPath = $Discovered.FullName
-        $KmiTag = Split-Path -Leaf (Split-Path -Parent $KoPath)
     } else {
         $KoPath = "kernel\pathmask.ko"
     }
@@ -107,8 +106,8 @@ if ($ProcguardKoPath) {
 $ModulePropPath = Join-Path $StageDir "module.prop"
 
 # If the caller didn't pass -UpdateJson, derive a default from the
-# ko filename's KMI prefix or from the kernel\out\<kmi>\ directory the
-# ko was discovered in so module.prop always has the field. KSU
+# ko filename's KMI prefix or its parent directory, for both explicit
+# paths and automatically discovered builds. KSU
 # manager treats absence of `updateJson=` as "module never publishes
 # updates", which silently breaks the in-app update prompt -- worth
 # defaulting to the canonical raw URL even for ad-hoc local builds,
@@ -118,6 +117,8 @@ if (-not $PSBoundParameters.ContainsKey('UpdateJson')) {
     $KoBase = [System.IO.Path]::GetFileNameWithoutExtension($KoPath)
     if ($KoBase -match '^(android\d+-\d+\.\d+)_pathmask$') {
         $KmiTag = $Matches[1]
+    } elseif ($KoBase -eq 'pathmask') {
+        $KmiTag = Split-Path -Leaf (Split-Path -Parent (Resolve-Path -LiteralPath $KoPath).Path)
     }
     if ($KmiTag -match '^android\d+-\d+\.\d+$') {
         $UpdateJson = "https://raw.githubusercontent.com/Andrea-lyz/LKM-PathMask/main/update/${KmiTag}.json"
