@@ -6,6 +6,10 @@ testing on devices you own or administer.
 
 [中文教程](README.zh-CN.md)
 
+Current release: **v2.8.1** (versionCode **57**). This release adopts KallRecon
+for VFS helper resolution, improves GKI 5.10 loading compatibility, and completes
+the per-KMI build and packaging migration. See [the changelog](update/changelog.md).
+
 ## ⚠️ Disclaimer
 
 PathMask is **not** designed to evade root or environment detection in games.

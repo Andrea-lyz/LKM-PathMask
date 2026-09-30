@@ -106,51 +106,61 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          VERSION="$(sed -n 's/^version=//p' ksu-module/module.prop | tr -d '\r')"
+          sh tools/release_notes.sh "$VERSION" version > release-notes.md
+          sh tools/release_notes.sh "$VERSION" rolling > rolling-notes.md
+
           # Determine primary release target.
           # - On a tag push (refs/tags/v*) we publish to the immutable
           #   tag release AND mirror to the rolling pathmask-latest
-          #   release, so update.json clients (which point at
-          #   pathmask-latest) always get assets matching the most
-          #   recent tagged commit.
+          #   release for users of the rolling channel. Update manifests
+          #   point to the immutable version release.
           # - On a main push we only publish to pathmask-latest.
           # In both cases publish_targets is a space-separated list of
           # release tags to receive identical assets.
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             PRIMARY_TAG="${GITHUB_REF_NAME}"
+            if [ "$PRIMARY_TAG" != "v$VERSION" ]; then
+              echo "Tag $PRIMARY_TAG does not match module version $VERSION" >&2
+              exit 1
+            fi
             PUBLISH_TARGETS="${PRIMARY_TAG} pathmask-latest"
           else
             PRIMARY_TAG="pathmask-latest"
             PUBLISH_TARGETS="pathmask-latest"
-            # Force-move the rolling tag onto the new commit so the
-            # release page shows the right SHA.
-            git tag -f "pathmask-latest" "$GITHUB_SHA"
-            git push origin "refs/tags/pathmask-latest" --force
           fi
 
-          NOTES="Automated PathMask build for ${GITHUB_SHA}."
+          # Both version and main builds move the rolling tag; a cancelled
+          # main build must not leave it pointing at an older release.
+          git tag -f "pathmask-latest" "$GITHUB_SHA"
+          git push origin "refs/tags/pathmask-latest" --force
 
           for TAG in $PUBLISH_TARGETS; do
             if [ "$TAG" = "pathmask-latest" ]; then
               TITLE="PathMask latest"
               PRERELEASE_FLAG="--prerelease"
+              LATEST_FLAG="--latest=false"
+              NOTES_FILE="rolling-notes.md"
             else
               TITLE="PathMask ${TAG}"
-              PRERELEASE_FLAG=""
+              PRERELEASE_FLAG="--prerelease=false"
+              LATEST_FLAG="--latest"
+              NOTES_FILE="release-notes.md"
             fi
 
             if gh release view "$TAG" >/dev/null 2>&1; then
               gh release edit "$TAG" \
                 --title "$TITLE" \
-                --notes "$NOTES" \
+                --notes-file "$NOTES_FILE" \
                 $PRERELEASE_FLAG \
-                --latest=false \
+                $LATEST_FLAG \
                 --draft=false
             else
               gh release create "$TAG" \
                 --title "$TITLE" \
-                --notes "$NOTES" \
+                --notes-file "$NOTES_FILE" \
                 $PRERELEASE_FLAG \
-                --latest=false
+                $LATEST_FLAG
             fi
 
             gh release upload "$TAG" release-upload/* --clobber

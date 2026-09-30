@@ -66,6 +66,21 @@ sh "$PACKAGE_ROOT/tools/package_ksu.sh" "" out/test.zip > "$FIXTURE_ROOT/package
 check_package legacy ""
 echo "PASS 15 shell packaging cases and bundled defaults"
 
+version=$(sed -n 's/^version=//p' "$SOURCE_ROOT/ksu-module/module.prop" | tr -d '\r')
+sh "$SOURCE_ROOT/tools/release_notes.sh" "$version" version > "$FIXTURE_ROOT/version-notes.md"
+grep -q "^# PathMask $version$" "$FIXTURE_ROOT/version-notes.md"
+grep -q '^## 简体中文$' "$FIXTURE_ROOT/version-notes.md"
+grep -q '^## English$' "$FIXTURE_ROOT/version-notes.md"
+[ "$(grep -c '^# PathMask ' "$FIXTURE_ROOT/version-notes.md")" -eq 1 ]
+sh "$SOURCE_ROOT/tools/release_notes.sh" "$version" rolling > "$FIXTURE_ROOT/rolling-notes.md"
+grep -q 'Rolling prerelease' "$FIXTURE_ROOT/rolling-notes.md"
+grep -q '^## English$' "$FIXTURE_ROOT/rolling-notes.md"
+if sh "$SOURCE_ROOT/tools/release_notes.sh" missing-version > "$FIXTURE_ROOT/missing-notes.md"; then
+	echo "Release notes accepted a missing version" >&2
+	exit 1
+fi
+echo "PASS version/rolling bilingual release notes and missing-version rejection"
+
 # Real local Git repositories exercise pins without network access.
 sdk_source="$FIXTURE_ROOT/sdk-source"
 dep_source="$FIXTURE_ROOT/dep-source"

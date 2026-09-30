@@ -1,3 +1,35 @@
+# PathMask 2.8.1
+
+## 简体中文
+
+- **改善 GKI 5.10 加载兼容性**：使用 KallRecon 解析 kern_path、path_put 和可选的 close_fd 地址，移除仅用于符号解析的 register_kprobe / unregister_kprobe 硬导入，解决部分 5.10 内核因不导出这些符号而拒绝加载的问题。路径遮罩仍使用原有 kretprobe 钩子，不改变隐藏规则、UID 作用范围或写入策略。
+- **构建目录按 KMI 隔离**：自主源码移动到 kernel/src/，KallRecon / KMSDK 依赖由固定提交管理，产物保存到 kernel/out/<KMI>/。本地 DDK 脚本与 CI 统一使用 20260828 镜像版本，并先拉取依赖、再清理和构建目标 KMI。
+- **固定依赖并保护本地修改**：KallRecon 使用完整提交 SHA。构建前后校验依赖目录的实际版本；版本不符或存在本地修改时明确报错，保留现场。make format 只处理 src/，不再修改第三方依赖和生成目录。
+- **修复本地打包更新通道**：PowerShell 与 Shell 打包脚本均支持显式指定 kernel/out/<KMI>/pathmask.ko，并从文件名前缀或父目录识别正确的 KMI 更新清单。保留最新产物自动发现及旧目录兼容，中英文构建与打包文档同步更新。
+- **增加工具回归检查**：CI 覆盖两套脚本共 30 个打包用例，以及默认配置保留、依赖异常保护、本地构建流程和格式化范围。发布任务必须在工具测试和八个 KMI 构建均成功后执行。
+- **完整发布说明与版本同步**：模块、WebUI 和八份更新清单统一到 2.8.1 / versionCode 57。Release 自动使用本版本的中英文更新日志，pathmask-latest 保持滚动预发布镜像并同步到当前提交。
+
+### 验证与升级
+
+- PR #11 作者已确认 KallRecon 在 5.10 内核上解析 VFS helper 并正常使用；该设备验证由贡献者提供。项目 CI 编译矩阵覆盖 Android 12 / 5.10 至 Android 17 / 6.18 共八个 KMI。
+- 安装与设备 KMI 匹配的 KernelSU ZIP。已有持久化配置、默认配置、service.sh 加载时序和 WebUI 功能保持不变；本版本不引入新的配置迁移。
+- 感谢 [@Dere3046](https://github.com/Dere3046) 的 [PR #11](https://github.com/Andrea-lyz/LKM-PathMask/pull/11) 及 KallRecon / KMSDK。
+
+## English
+
+- **Improved GKI 5.10 loading compatibility**: resolve kern_path, path_put and the optional close_fd through KallRecon. This removes hard imports of register_kprobe / unregister_kprobe that were used only for symbol resolution and could prevent loading on 5.10 kernels without those exports. Path masking still uses the existing kretprobe hooks; hiding rules, UID scopes and write policies are unchanged.
+- **Separate build outputs for each KMI**: project sources now live in kernel/src/, KallRecon / KMSDK use pinned commits, and outputs live in kernel/out/<KMI>/. The local DDK wrapper uses the same 20260828 image release as CI and fetches dependencies before cleaning and building the selected target.
+- **Pinned dependencies with local-work protection**: KallRecon uses its full commit SHA. Dependency checkouts are verified before and after installation; mismatched revisions or local changes produce an explicit error without overwriting the checkout. make format only touches src/, excluding third-party and generated files.
+- **Correct update channels for local packages**: both PowerShell and shell packaging support explicit kernel/out/<KMI>/pathmask.ko paths and infer the update manifest from the filename prefix or parent KMI directory. Latest-output discovery and the legacy layout remain supported, and both language guides were updated.
+- **Tool regression checks**: CI covers 30 packaging cases across both scripts, bundled-default preservation, dependency rejection paths, the local build sequence and formatting scope. Publishing requires both the tool tests and all eight KMI builds to succeed.
+- **Complete release notes and version synchronization**: module metadata, the WebUI and all eight update manifests use 2.8.1 / versionCode 57. Releases take their bilingual notes from this changelog; pathmask-latest remains a rolling prerelease mirror and points to the current commit.
+
+### Validation and upgrading
+
+- The PR #11 author confirmed VFS-helper resolution and normal use with KallRecon on a 5.10 kernel; this device validation was supplied by the contributor. The project CI build matrix covers eight KMIs from Android 12 / 5.10 through Android 17 / 6.18.
+- Install the KernelSU ZIP matching your device KMI. Existing persistent settings, bundled defaults, service.sh timing and WebUI functionality are preserved, with no new configuration migration.
+- Thanks to [@Dere3046](https://github.com/Dere3046) for [PR #11](https://github.com/Andrea-lyz/LKM-PathMask/pull/11), KallRecon and KMSDK.
+
 # PathMask 2.8.0
 
 - **WebUI 中英双语**。标签行右端新增「中 / EN」语言开关：界面文案、开关说明、诊断结论、健康检查项、报告骨架、日志分页标签和三个弹窗（捐赠 / 历史诊断 / 路径说明）全部提供英文版本。首次进入按浏览器语言自动选择，手动切换后记住选择；切换语言只重渲染屏幕上已有内容，不重新读盘、不重建路径行，未保存的编辑不会丢失。英文标签比中文宽，因此英文下把标签和顶栏按钮字号各压一档，保证 360px 宽度下标签行与标题都不折行、不裁剪；中文界面与旧版完全一致。
