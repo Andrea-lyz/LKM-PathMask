@@ -2,8 +2,8 @@
 
 PathMask 是一个 Android GKI/arm64 内核模块演示项目。它可以把指定路径在指定 App 面前伪装成“不存在”。请只在你自己的设备或你有明确授权的设备上测试。
 
-当前版本：**v2.8.1**（versionCode **57**）。本版采用 KallRecon 解析 VFS 辅助函数，
-改善 GKI 5.10 加载兼容性，并完善按 KMI 隔离的构建和打包流程。
+当前版本：**v2.8.2**（versionCode **58**）。本版把 KallRecon 更新到上游合并的
+GKI 6.1 修复，解决 Pixel 8（6.1 内核）报告的加载回归。
 完整说明见[更新日志](update/changelog.md)。
 
 ## ⚠️ 重要提示

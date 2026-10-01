@@ -1,3 +1,31 @@
+# PathMask 2.8.2
+
+## 简体中文
+
+- **修复 GKI 6.1 加载回归**：2.8.1 在部分 6.1 内核（例如 Pixel 8 的 6.1.162-android14-11）上，符号表搜索窗口遇到不可读页时会提前停止，报 `kallsyms recovery failed` 并拒绝加载。本版更新 KallRecon：滑窗读取失败时按页回退并保留可读部分，允许越过不可读区域继续搜索，offsets 序列也不再跨洞拼接。
+- **更新依赖固定版本**：KallRecon 固定到上游合并提交 ff73eae8ffec61e160f3d6edf22d0b97c53424d4（修复见 [KallRecon #7](https://github.com/Dere3046/KallRecon/issues/7)）。构建、打包与发布流程与 2.8.1 一致。
+- **版本同步**：module.prop、WebUI 标题和八份更新清单统一到 2.8.2 / versionCode 58。
+
+### 验证与升级
+
+- 报告者在 Pixel 8（6.1.162-android14-11-g2ec90535fa34-ab15810641）上确认：修复构建可正常加载，原有隐藏目标继续生效。
+- 项目 CI 覆盖 Android 12 / 5.10 至 Android 17 / 6.18 共八个 KMI，并包含依赖固定、打包和发布说明回归检查。
+- 安装与设备 KMI 匹配的 KernelSU ZIP。配置格式、默认配置和 service.sh 加载时序不变，无需迁移。
+- 感谢 [@Dere3046](https://github.com/Dere3046) 的上游修复，以及 [@Tom-and-Tony](https://github.com/Tom-and-Tony) 提供的设备日志与验证。
+
+## English
+
+- **Fixed a GKI 6.1 load regression**: on some 6.1 kernels (for example the Pixel 8 build 6.1.162-android14-11), 2.8.1 stopped the kallsyms search when a sliding-window read hit an unreadable page, then failed with `kallsyms recovery failed`. This release updates KallRecon so a failed window read falls back to page-sized reads, keeps the readable part, continues past unreadable regions, and never joins an offsets run across a hole.
+- **Updated pinned dependency**: KallRecon is pinned to upstream merge commit ff73eae8ffec61e160f3d6edf22d0b97c53424d4 (fix tracked in [KallRecon #7](https://github.com/Dere3046/KallRecon/issues/7)). Build, packaging and release flows are unchanged from 2.8.1.
+- **Version synchronization**: module.prop, the WebUI title and all eight update manifests use 2.8.2 / versionCode 58.
+
+### Validation and upgrading
+
+- The reporter confirmed on a Pixel 8 (6.1.162-android14-11-g2ec90535fa34-ab15810641) that the fixed build loads normally and the existing hiding targets keep working.
+- CI covers eight KMIs from Android 12 / 5.10 through Android 17 / 6.18, including dependency pinning, packaging and release-note regression checks.
+- Install the KernelSU ZIP matching your device KMI. The configuration format, bundled defaults and service.sh timing are unchanged; no migration is needed.
+- Thanks to [@Dere3046](https://github.com/Dere3046) for the upstream fix and [@Tom-and-Tony](https://github.com/Tom-and-Tony) for the device logs and validation.
+
 # PathMask 2.8.1
 
 ## 简体中文
