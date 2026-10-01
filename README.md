@@ -6,9 +6,9 @@ testing on devices you own or administer.
 
 [中文教程](README.zh-CN.md)
 
-Current release: **v2.8.1** (versionCode **57**). This release adopts KallRecon
-for VFS helper resolution, improves GKI 5.10 loading compatibility, and completes
-the per-KMI build and packaging migration. See [the changelog](update/changelog.md).
+Current release: **v2.8.2** (versionCode **58**). This release pins KallRecon to
+the merged upstream GKI 6.1 fix and resolves the load regression reported on a
+Pixel 8 (6.1 KMI). See [the changelog](update/changelog.md).
 
 ## ⚠️ Disclaimer
 
