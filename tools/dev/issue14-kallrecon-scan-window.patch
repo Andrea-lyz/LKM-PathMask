@@ -1,0 +1,37 @@
+diff --git a/lib/discover.c b/lib/discover.c
+index aebee72..cbc9721 100644
+--- a/lib/discover.c
++++ b/lib/discover.c
+@@ -15,10 +15,10 @@
+ #include "discover.h"
+ 
+ #define KS_RUN_MIN	5000		/* min offsets run length */
+-#define KS_RUN_MAX	500000		/* run scan cap */
++#define KS_RUN_MAX	2000000		/* run scan cap */
+ #define KS_RB_SEARCH	4096		/* rb delta search range */
+ #define KS_FALLBACK_OFF	0x1000		/* token_table fallback guess */
+-#define KS_SCAN_BACK	0x400000	/* scan range below token_table */
++#define KS_SCAN_BACK	0x2000000	/* scan range below token_table */
+ #define KS_SCAN_FWD	0x200000	/* scan range above token_index */
+ #define KS_NUM_SEARCH	0x1000000	/* v3 num_syms search below names */
+ #define KS_PCPU_EXT_MAX	100000		/* percpu extend entry cap */
+@@ -515,6 +515,8 @@ static int discover_kallsyms(unsigned long ti_addr)
+ 		kltable_addr = ti_addr - KS_FALLBACK_OFF;
+ 	scan_start = kltable_addr > KS_SCAN_BACK ?
+ 		(kltable_addr - KS_SCAN_BACK) & ~KS_PAGE_MASK : kernel_base;
++	if (scan_start < kernel_base)
++		scan_start = kernel_base;
+ 	scan_end = (ti_addr + KS_SCAN_FWD + KS_PAGE_MASK) & ~KS_PAGE_MASK;
+ 
+ 	ks_dbg("[kallrecon] scan 0x%lx-0x%lx kltable=0x%lx\n",
+@@ -664,8 +666,8 @@ static void resolve_layout_v2(void)
+ 	}
+ 
+ 	if (klmarks_addr && klnum_val) {
+-		unsigned long end_addr = klmarks_addr > 0x300000 ?
+-			klmarks_addr - 0x300000 : kernel_base;
++		unsigned long end_addr = klmarks_addr > 0x2000000 ?
++			klmarks_addr - 0x2000000 : kernel_base;
+ 
+ 		end_addr &= ~3ULL;
+ 		for (unsigned long addr = klmarks_addr & ~3ULL;

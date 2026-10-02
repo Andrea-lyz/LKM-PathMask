@@ -1,0 +1,85 @@
+name: Issue 14 KallRecon test package (android13-5.15, scan-window patch)
+
+# Temporary validation workflow for the Xiaomi 13 Pro / GKI 5.15 report in
+# issue #14. Builds the pinned KallRecon revision with the scan-window patch
+# tracked in Dere3046/KallRecon#8 and uploads a KernelSU test zip for the
+# reporter. It publishes no Release and does not touch main.
+on:
+  push:
+    branches: ['dev/kallrecon-issue14-window']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build-pathmask:
+    name: Build patched pathmask for android13-5.15
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:android13-5.15-20260828
+      options: --privileged
+
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v6
+
+    - name: Fetch pinned dependencies
+      run: |
+        cd kernel
+        sh scripts/fetch-deps.sh
+
+    - name: Apply KallRecon scan-window test patch
+      run: |
+        cd kernel
+        git -C deps/KallRecon apply "$(pwd)/../tools/dev/issue14-kallrecon-scan-window.patch"
+        git -C deps/KallRecon diff --stat
+        grep -n 'define KS_SCAN_BACK' deps/KallRecon/lib/discover.c
+        grep -n 'scan_start < kernel_base' deps/KallRecon/lib/discover.c
+
+    - name: Build pathmask.ko and procguard.ko
+      run: |
+        cd kernel
+        echo "=== Building pathmask.ko for android13-5.15 (KallRecon debug logs on) ==="
+        CONFIG_KSU=m CC=clang make VER="android13-5.15" KCFLAGS=-DKALLRECON_DEBUG
+        KO_DIR="out/android13-5.15"
+        mkdir -p /github/workspace/out
+        cp "$KO_DIR/pathmask.ko" "/github/workspace/out/android13-5.15_pathmask.ko"
+        cp "$KO_DIR/procguard.ko" "/github/workspace/out/android13-5.15_procguard.ko"
+        llvm-strip -d "/github/workspace/out/android13-5.15_pathmask.ko"
+        llvm-strip -d "/github/workspace/out/android13-5.15_procguard.ko"
+        ls -la /github/workspace/out
+
+    - name: Upload patched ko artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: android13-5.15-kallrecon-issue14-ko
+        path: /github/workspace/out/*.ko
+
+  package-test-zip:
+    name: Package android13-5.15 test zip
+    needs: build-pathmask
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/download-artifact@v7
+      with:
+        name: android13-5.15-kallrecon-issue14-ko
+        path: ko
+    - name: Package KernelSU test zip from the patched build
+      run: |
+        cp ko/*.ko .
+        NO_UPDATE_JSON=1 sh tools/package_ksu.sh android13-5.15_pathmask.ko out/issue14-test.zip
+        echo "--- artifact hashes ---"
+        sha256sum android13-5.15_pathmask.ko android13-5.15_procguard.ko out/issue14-test.zip
+        echo "--- zip contents ---"
+        unzip -l out/issue14-test.zip
+    - uses: actions/upload-artifact@v7
+      with:
+        name: android13-5.15-kallrecon-issue14-window-test
+        path: |
+          out/issue14-test.zip
+          android13-5.15_pathmask.ko
+          android13-5.15_procguard.ko
+        retention-days: 90
