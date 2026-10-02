@@ -51,6 +51,17 @@ jobs:
         llvm-strip -d "/github/workspace/out/android13-5.15_procguard.ko"
         ls -la /github/workspace/out
 
+    - name: Verify KallRecon debug flag reached the compiler
+      run: |
+        cd kernel
+        CMD=$(find out/android13-5.15 -name '.discover.o.cmd' -print -quit)
+        echo "cmd file: $CMD"
+        if [ -z "$CMD" ]; then
+          echo "no .discover.o.cmd found" >&2
+          exit 1
+        fi
+        grep -c -- '-DKALLRECON_DEBUG' "$CMD"
+
     - name: Upload patched ko artifacts
       uses: actions/upload-artifact@v7
       with:
