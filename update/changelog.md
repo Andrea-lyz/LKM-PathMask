@@ -1,3 +1,31 @@
+# PathMask 2.8.3
+
+## 简体中文
+
+- **修复部分自编译 5.15 内核上的模块加载失败**：KallRecon 默认仅向 `kallsyms_token_table` 前方扫描 4 MiB；issue #14 的 Xiaomi 13 Pro 内核中，真实的 `kallsyms_offsets` 位于前方约 5.81 MiB。PathMask 现在仅在首次扫描报告未找到 offsets 时，使用上游新接口扩大到 32 MiB 重试。常规内核继续使用原来的默认窗口。
+- **更新 KallRecon**：固定到上游提交 [138799cc](https://github.com/Dere3046/KallRecon/commit/138799cc0be387db12941d2296f49636ec192ee5)。它提供可配置的扫描窗口、失败原因和重试支持；PathMask 不再需要临时测试补丁。
+- **版本同步**：模块、WebUI 和八份更新清单统一到 2.8.3 / versionCode 59。
+
+### 验证与升级
+
+- 报告者在 Xiaomi 13 Pro（5.15.220-ChirunoNeko-261001）上验证了扩大扫描窗口的测试构建：恢复了 208,644 个符号，VFS helper 和钩子成功注册，模块已加载。正式版改用上游接口按失败原因重试；这一路径仍需安装 2.8.3 后验证。
+- CI 构建覆盖 Android 12 / 5.10 至 Android 17 / 6.18 共八个 KMI，并检查依赖固定、打包和发布说明。
+- 安装与设备 KMI 匹配的 KernelSU ZIP。配置格式和默认值不变，无需迁移。
+- 感谢 [@Dere3046](https://github.com/Dere3046) 的上游修复，以及 issue #14 报告者提供内核镜像和设备验证。
+
+## English
+
+- **Fixed loading on some custom 5.15 kernels**: KallRecon normally scans only 4 MiB behind `kallsyms_token_table`. On the Xiaomi 13 Pro kernel from issue #14, the real `kallsyms_offsets` table is about 5.81 MiB behind it. PathMask now retries with a 32 MiB window only when the first attempt reports that offsets were not found. Other kernels retain the default scan.
+- **Updated KallRecon**: pinned to upstream commit [138799cc](https://github.com/Dere3046/KallRecon/commit/138799cc0be387db12941d2296f49636ec192ee5), which adds configurable scan windows, failure reasons, and retry support. The temporary test patch is no longer needed.
+- **Version synchronization**: module metadata, WebUI and all eight update manifests use 2.8.3 / versionCode 59.
+
+### Validation and upgrading
+
+- The reporter validated a test build with an enlarged scan window on a Xiaomi 13 Pro (5.15.220-ChirunoNeko-261001): all 208,644 symbols were recovered, VFS helpers and hooks registered, and the module loaded. The release uses the new upstream API to retry on that failure; installation of 2.8.3 is still needed to validate that exact build on the device.
+- CI builds eight KMIs from Android 12 / 5.10 through Android 17 / 6.18 and checks dependency pinning, packaging, and release notes.
+- Install the KernelSU ZIP matching your KMI. Config formats and defaults are unchanged; no migration is required.
+- Thanks to [@Dere3046](https://github.com/Dere3046) for the upstream fix and to the issue #14 reporter for the kernel image and device validation.
+
 # PathMask 2.8.2
 
 ## 简体中文

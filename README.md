@@ -6,9 +6,10 @@ testing on devices you own or administer.
 
 [中文教程](README.zh-CN.md)
 
-Current release: **v2.8.2** (versionCode **58**). This release pins KallRecon to
-the merged upstream GKI 6.1 fix and resolves the load regression reported on a
-Pixel 8 (6.1 KMI). See [the changelog](update/changelog.md).
+Current release: **v2.8.3** (versionCode **59**). This release updates KallRecon
+and retries kallsyms discovery with a wider window when the offsets table is
+outside its default range, as reported on a Xiaomi 13 Pro custom 5.15 kernel.
+See [the changelog](update/changelog.md).
 
 ## ⚠️ Disclaimer
 
