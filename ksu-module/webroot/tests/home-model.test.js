@@ -141,3 +141,15 @@ test("diagnostic danger becomes the home verdict", () => {
 	assert.match(model.detail, /sysfs/);
 	assert.equal(model.primaryAction, "diagnose");
 });
+
+test("global scope shows every app once instead of a duplicated note", () => {
+	const model = buildHomeModel({
+		draft: baseDraft({ scope: "global" }),
+		status: baseStatus(),
+		diagnostics: null,
+		validation: { ok: true, errors: [], warnings: [] },
+	}, t);
+	assert.equal(model.appCount, "∞");
+	assert.equal(model.appNote, "全部应用");
+	assert.equal(model.uidCount, 0);
+});

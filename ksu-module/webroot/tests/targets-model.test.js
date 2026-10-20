@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
 	buildPathProbeCommand,
+	parseBulkPaths,
 	parsePathProbe,
 	scopeCopy,
 	selectionSummary,
@@ -99,4 +100,24 @@ test("parsePathProbe maps shell output back to rows", () => {
 	assert.equal(map.get(0), true);
 	assert.equal(map.get(1), false);
 	assert.equal(map.get(2), null);
+});
+
+test("parseBulkPaths keeps valid prefixed lines and reports the rest", () => {
+	const result = parseBulkPaths(`
+# comment
+/system_ext/app/SoterService
+dir:/dev/???/scene_mode_category
+any:scene:/dev/cpuset/scene-daemon
+relative/path
+/a
+/a
+`, [{ path: "/a", useParent: false, group: "" }]);
+	assert.deepEqual(result.items, [
+		{ path: "/system_ext/app/SoterService", useParent: false, group: "" },
+		{ path: "/dev/???/scene_mode_category", useParent: true, group: "" },
+		{ path: "/dev/cpuset/scene-daemon", useParent: false, group: "scene" },
+	]);
+	assert.equal(result.errors.length, 3);
+	assert.match(result.errors.join("\n"), /绝对路径/);
+	assert.match(result.errors.join("\n"), /重复/);
 });

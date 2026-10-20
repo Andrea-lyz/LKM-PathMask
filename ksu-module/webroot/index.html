@@ -154,13 +154,14 @@
 							<button id="pathHelpBtn" class="iconButton" type="button" aria-label="路径配置说明" data-i18n-aria-label title="路径配置说明" data-i18n-title>
 								<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9.2a2.3 2.3 0 1 1 3.1 2.1c-.7.3-.9.8-.9 1.5"/><path d="M12 16.6v.1"/></svg>
 							</button>
+							<button id="bulkAddPathsBtn" class="button ghost small" type="button" data-i18n>批量粘贴</button>
 							<button id="targetsAddPathBtn" class="button primary small" type="button" data-i18n>添加路径</button>
 						</div>
 					</div>
 					<div id="pathList" class="pathList"></div>
 					<div id="pathEmpty" class="emptyState" hidden>
 						<strong data-i18n>还没有隐藏路径</strong>
-						<span data-i18n>添加第一条路径后，保存并热重载即可生效。</span>
+						<span data-i18n>添加第一条路径后，应用并重载即可生效。</span>
 						<button id="emptyAddPathBtn" class="button primary" type="button" data-i18n>添加路径</button>
 					</div>
 					<p class="hint" data-i18n>路径当前是否存在由页面探测；带 ??? 的路径匹配不到是正常现象。</p>
@@ -364,6 +365,7 @@
 						<span><strong data-i18n>启用 syscall 兜底</strong><small class="hint" data-i18n>默认只挂 6 个，不推荐开启 faccessat。</small></span>
 						<input id="enableSyscallHooksInput" type="checkbox">
 					</label>
+					<p id="syscallCount" class="hint"></p>
 					<details class="advanced" id="syscallHooksDetails">
 						<summary data-i18n>选择具体 syscall（高级）</summary>
 						<div class="advancedBody">

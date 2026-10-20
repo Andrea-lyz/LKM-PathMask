@@ -506,6 +506,8 @@ true
 		orphanDenyUids: trueOrphans,
 		directDenyUids: [...directDenyUids],
 		allowSystemUids: confAllowSystemUids,
+		procguard: parseBoolish(snapshot.procguardConfText, false),
+		procguardLoaded: /^procguard\s/m.test(String(snapshot.procguardModuleText || "")),
 	};
 }
 

@@ -66,13 +66,15 @@ Implemented:
 - Resolves package names to UIDs in the KernelSU boot service.
 - Stores runtime config under `/data/adb/pathmask`.
 - Migrates old `/data/adb/nohello` config on first PathMask boot.
-- Provides a KernelSU WebUI with config validation, health checks, paged logs,
-  one-click diagnostic report copying, hot reload, and temporary pause. The UI
-  ships in Simplified Chinese and English; the 中 / EN switch sits at the end of
-  the tab row, and the choice is remembered.
+- Provides a task-oriented KernelSU WebUI with four tabs: Overview, Targets,
+  Diagnostics, and Settings. Configuration edits are staged in a draft, and
+  a sticky bar offers save-only, apply-and-reload, and discard. Diagnostics,
+  health checks, paged logs, report copying, hot reload, and temporary pause
+  are still available. The UI ships in Simplified Chinese and English; the
+  中 / EN switch is in Settings, and the choice is remembered.
 - Skips future automatic load attempts after repeated `insmod` failures until
   the user retries from WebUI or clears the failure guard.
-- Ships an optional companion module `procguard.ko` (WebUI "Protection" tab,
+- Ships an optional companion module `procguard.ko` (WebUI Settings tab,
   default off) that neutralizes the leaked gid 3009 (AID_READPROC) for Android
   isolated UIDs, closing the LSPosed Privisolated /proc-enumeration vector.
 - Avoids importing `kern_path()` / `path_put()` directly. Target resolution
@@ -292,11 +294,11 @@ edits these files for you, but they can also be inspected manually:
   native filesystem returns stock errnos; `eacces` makes write probes see the
   exact profile of a genuinely absent path (mkdir/Create etc. EACCES,
   unlink/rename source ENOENT) to block existence inference; `enoent` keeps
-  the legacy blanket ENOENT. Switched from the WebUI Protection tab, which
-  persists the value and hot-reloads.
+  the legacy blanket ENOENT. Switched from the WebUI Settings tab; the change
+  is staged until Apply and reload.
 - `/data/adb/pathmask/procguard.conf`: isolation-protection switch. Default
-  `0`. `1` loads the companion `procguard.ko` at boot; the WebUI Protection
-  tab writes this file and applies the change immediately.
+  `0`. `1` loads the companion `procguard.ko` at boot; the WebUI Settings tab
+  stages the change and applies it on Apply and reload.
 
 The latest Scene auto-discovery result is recorded in
 `/data/adb/pathmask/scene_debugfs_state`, with resolved paths written one per
@@ -312,13 +314,20 @@ target/UID fallback budget remains unchanged.
 
 Open KernelSU Manager, enter PathMask WebUI, then use:
 
-- `配置`: edit paths, mode, packages, and direct UIDs.
-- `诊断`: view health checks and generate a report.
-- `日志`: page through script, kernel, status, and config logs.
-- `报告`: copy a single report for issue reports.
+- `概览`: status, current paths and scope, quick actions, latest diagnosis.
+- `目标`: paths, scope mode, app selection, and advanced direct UIDs.
+- `诊断`: verdict and health checks, paged logs, and a copyable report.
+- `设置`: isolation protection, write policy, syscall fallback, Scene
+  auto-detection, boot wait, language, pause, and restore defaults.
 
-When a user says "module not loaded", ask them to open `诊断 -> 生成诊断 ->
-复制诊断报告` and send the full text.
+Configuration changes are staged. The sticky bar shows the number of unsaved
+changes and offers `仅保存` (save only), `应用并重载` (apply and reload), and
+`丢弃` (discard). Opening Diagnostics does not collect anything; press
+`重新诊断` (run diagnostics again) first. Pause and restore-defaults require
+confirmation in the Settings tab.
+
+When a user says "module not loaded", ask them to open `诊断 -> 重新诊断 ->
+复制报告` and send the full text.
 
 ## Quick Device Checks
 

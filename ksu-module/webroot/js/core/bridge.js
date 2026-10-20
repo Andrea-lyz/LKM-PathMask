@@ -37,9 +37,7 @@
 	}
 
 	function execShell(command, options = {}) {
-		const bridge = Object.prototype.hasOwnProperty.call(options, "bridge")
-			? options.bridge
-			: getKsuBridge();
+		const bridge = options.bridge || getKsuBridge();
 		const target = options.root || root;
 		if (!bridge || typeof bridge.exec !== "function") {
 			return Promise.reject(unavailableError());

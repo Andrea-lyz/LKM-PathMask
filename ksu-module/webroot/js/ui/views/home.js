@@ -184,12 +184,12 @@
 		}
 
 		const appNote = scope === "global"
-			? t("应用列表不参与")
+			? t("全部应用")
 			: appCount
 				? t("{0} 个应用", [appCount])
 				: t("未选择应用");
 		const uidNote = scope === "global"
-			? t("全部应用")
+			? ""
 			: uidCount
 				? t("{0} 个 UID", [uidCount])
 				: t("未直接填写 UID");
@@ -216,7 +216,7 @@
 				? [parentCount ? t("{0} 条父级", [parentCount]) : "", groupCount ? t("{0} 个 OR 组", [groupCount]) : ""]
 					.filter(Boolean).join(" · ")
 				: t("还没有配置"),
-			appCount,
+			appCount: scope === "global" ? "∞" : appCount,
 			appNote: `${appNote}${uidNote ? ` · ${uidNote}` : ""}`,
 			guardValue,
 			guardNote,
@@ -382,7 +382,7 @@
 			app.navigate("targets");
 			app.setTargetsTab("paths");
 			const targets = root.PathMask.views.targets;
-			if (targets && typeof targets.addPath === "function") targets.addPath(app);
+			if (targets && typeof targets.openPathEditor === "function") targets.openPathEditor(app, -1);
 		};
 		const pickApps = document.getElementById("homePickAppsBtn");
 		if (pickApps) pickApps.onclick = () => {
@@ -394,7 +394,7 @@
 		const pause = document.getElementById("homePauseBtn");
 		if (pause) pause.onclick = () => {
 			const settings = root.PathMask.views.settings;
-			if (settings && typeof settings.pause === "function") settings.pause(app);
+			if (settings && typeof settings.pauseHiding === "function") settings.pauseHiding(app);
 			else app.toast(app.i18n.t("请在设置中暂停隐藏"));
 		};
 		const openDiag = document.getElementById("openDiagnosticsBtn");

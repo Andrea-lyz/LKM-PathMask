@@ -19,21 +19,42 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function (root, format, appsApi) {
 	"use strict";
 
-	function validatePathDraft(candidate, paths, editingIndex = -1) {
+	function defaultTranslate(source, params) {
+		return String(source).replace(/\{(\d+)\}/g, (match, index) => (
+			params && params[Number(index)] !== undefined ? String(params[Number(index)]) : match
+		));
+	}
+
+	function validatePathDraft(candidate, paths, editingIndex = -1, t = defaultTranslate) {
 		const errors = [];
 		const path = String(candidate.path || "").trim();
 		const group = String(candidate.group || "").trim();
-		if (!path) return ["路径不能为空"];
-		if (!path.startsWith("/")) errors.push(`路径必须是绝对路径：${path}`);
-		if (/\s/.test(path)) errors.push(`路径不能包含空白字符：${path}`);
-		if (group && /[\s:]/.test(group)) errors.push(`OR 组名不能包含空格或冒号：${group}`);
+		if (!path) return [t("路径不能为空")];
+		if (!path.startsWith("/")) errors.push(t("路径必须是绝对路径：{0}", [path]));
+		if (/\s/.test(path)) errors.push(t("路径不能包含空白字符：{0}", [path]));
+		if (group && /[\s:]/.test(group)) errors.push(t("OR 组名不能包含空格或冒号：{0}", [group]));
 		const key = format.joinTargetLine(path, candidate.useParent, group);
 		(paths || []).forEach((item, index) => {
 			if (index === editingIndex) return;
 			const other = format.joinTargetLine(item.path, item.useParent, item.group);
-			if (other === key) errors.push(`路径重复：${key}`);
+			if (other === key) errors.push(t("路径重复：{0}", [key]));
 		});
 		return errors;
+	}
+
+	function parseBulkPaths(text, existingPaths = [], t = defaultTranslate) {
+		const items = [];
+		const errors = [];
+		for (const line of format.linesFromText(text)) {
+			const candidate = format.splitTargetLine(line);
+			const rowErrors = validatePathDraft(candidate, [...existingPaths, ...items], -1, t);
+			if (rowErrors.length) {
+				errors.push(`${line}: ${rowErrors[0]}`);
+			} else {
+				items.push({ path: candidate.path, useParent: candidate.useParent, group: candidate.group });
+			}
+		}
+		return { items, errors };
 	}
 
 	function scopeCopy(scope, t) {
@@ -148,7 +169,7 @@
 		paths.forEach((item, index) => {
 			const row = document.createElement("div");
 			row.className = "pathRow";
-			const errors = validatePathDraft(item, paths, index);
+			const errors = validatePathDraft(item, paths, index, app.i18n.t);
 			if (errors.length) row.classList.add("is-invalid");
 
 			const main = document.createElement("div");
@@ -191,6 +212,8 @@
 		if (emptyAdd) emptyAdd.onclick = () => openPathEditor(app, -1);
 		const help = document.getElementById("pathHelpBtn");
 		if (help) help.onclick = () => showPathHelp(app);
+		const bulk = document.getElementById("bulkAddPathsBtn");
+		if (bulk) bulk.onclick = () => openBulkAdd(app);
 	}
 
 	function badge(text, type) {
@@ -523,7 +546,7 @@
 					group: form.querySelector("#pathGroupInput").value.trim(),
 					useParent: form.querySelector("#pathParentInput").checked,
 				};
-				const errors = validatePathDraft(candidate, app.getDraft().paths, index);
+				const errors = validatePathDraft(candidate, app.getDraft().paths, index, app.i18n.t);
 				if (errors.length) {
 					form.querySelector("#pathFormError").textContent = errors[0];
 					input.focus();
@@ -537,6 +560,40 @@
 				});
 				render(app);
 				app.toast(index >= 0 ? app.i18n.t("路径已更新") : app.i18n.t("路径已添加"));
+				return true;
+			},
+		});
+	}
+
+	function openBulkAdd(app) {
+		const form = document.createElement("div");
+		form.className = "sheetForm";
+		form.innerHTML = `
+			<label class="field">
+				<span>${app.i18n.t("每行一条路径")}</span>
+				<textarea id="bulkPathInput" rows="8" spellcheck="false" placeholder="/system/app/example&#10;dir:/dev/???/scene_mode_category&#10;any:scene:/dev/cpuset/scene-daemon"></textarea>
+			</label>
+			<p class="sheetNote">${app.i18n.t("支持 dir: 父级前缀和 any:<组>: 前缀；空行与 # 注释会被忽略。")}</p>
+			<p id="bulkPathError" class="hint" role="alert"></p>
+		`;
+		app.openSheet({
+			title: app.i18n.t("批量粘贴路径"),
+			content: form,
+			saveText: app.i18n.t("添加"),
+			onSave: () => {
+				const result = parseBulkPaths(form.querySelector("#bulkPathInput").value, app.getDraft().paths, app.i18n.t);
+				if (!result.items.length) {
+					form.querySelector("#bulkPathError").textContent = result.errors[0] || app.i18n.t("没有可添加的路径");
+					return false;
+				}
+				app.updateDraft((current) => ({
+					...current,
+					paths: [...(current.paths || []), ...result.items],
+				}));
+				render(app);
+				app.toast(result.errors.length
+					? app.i18n.t("已添加 {0} 条，跳过 {1} 条无效路径", [result.items.length, result.errors.length])
+					: app.i18n.t("已添加 {0} 条路径", [result.items.length]));
 				return true;
 			},
 		});
@@ -570,7 +627,9 @@
 		buildPathProbeCommand,
 		loadApps,
 		normalizeUidText,
+		openBulkAdd,
 		openPathEditor,
+		parseBulkPaths,
 		parsePathProbe,
 		probePaths,
 		removePath,

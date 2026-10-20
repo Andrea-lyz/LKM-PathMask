@@ -33,7 +33,10 @@
 
 	function buildReloadCommand(servicePath = SERVICE) {
 		return [
-			`if grep -q '^1' ${format.shellQuote(config.CONFIG_FILES.procguard)} 2>/dev/null && grep -q '^${PROCGUARD_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_NAME} 2>/dev/null || true; fi`,
+			// Always unload the optional guard before restarting service.sh.
+			// Otherwise turning procguard off would write procguard.conf=0 but
+			// leave the already-loaded ko in place until the next reboot.
+			`if grep -q '^${PROCGUARD_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_NAME} 2>/dev/null || true; fi`,
 			`rm -f ${format.shellQuote(SCENE_STOP)} ${format.shellQuote(FAIL_COUNT)} ${format.shellQuote(FAIL_REASON)} 2>/dev/null || true`,
 			`if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi`,
 			`if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi`,
@@ -143,7 +146,7 @@
 
 	async function reloadModule(configObject, options = {}) {
 		const bridgeApi = options.bridge || bridge;
-		await config.writeConfig(configObject, { bridge: options.ksu });
+		await config.writeConfig(configObject, { bridge: options.bridge });
 		const output = await bridgeApi.execShell(buildReloadCommand(options.servicePath), { bridge: options.ksu });
 		return { output, status: await probeStatus({ bridge: bridgeApi, ksu: options.ksu }) };
 	}

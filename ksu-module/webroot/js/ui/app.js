@@ -92,18 +92,24 @@
 		loadInitial();
 	}
 
+	function versionLabel(version) {
+		const text = String(version || "").trim();
+		if (!text) return "—";
+		return /^v/i.test(text) ? text : `v${text}`;
+	}
+
 	function updateVersion() {
 		let version = state.moduleInfo && state.moduleInfo.version ? String(state.moduleInfo.version) : "";
-		if (dom.moduleVersion) dom.moduleVersion.textContent = version ? `v${version}` : "—";
-		if (dom.aboutVersion) dom.aboutVersion.textContent = version ? `v${version}` : "—";
+		if (dom.moduleVersion) dom.moduleVersion.textContent = versionLabel(version);
+		if (dom.aboutVersion) dom.aboutVersion.textContent = versionLabel(version);
 		if (version) return;
 		bridge.execShell("grep '^version=' /data/adb/modules/pathmask/module.prop 2>/dev/null | head -n1 || true")
 			.then((line) => {
 				const match = String(line || "").match(/=\s*(.+)/);
 				if (!match) return;
 				version = match[1].trim();
-				if (dom.moduleVersion) dom.moduleVersion.textContent = `v${version}`;
-				if (dom.aboutVersion) dom.aboutVersion.textContent = `v${version}`;
+				if (dom.moduleVersion) dom.moduleVersion.textContent = versionLabel(version);
+				if (dom.aboutVersion) dom.aboutVersion.textContent = versionLabel(version);
 			})
 			.catch(() => {});
 	}
@@ -134,7 +140,7 @@
 		state.config = configResult.config;
 		state.texts = configResult.texts || {};
 		state.status = status;
-		state.validation = root.PathMask.config.validateConfig(configResult.config);
+		state.validation = root.PathMask.config.validateConfig(configResult.config, i18n.t);
 		if (!store) {
 			state.store = storeApi.createStore(configResult.config);
 			store = state.store;
@@ -148,9 +154,7 @@
 
 	function onStoreChanged(snapshot) {
 		updateApplyBar(snapshot);
-		if (snapshot.dirty.length === 0) {
-			state.validation = root.PathMask.config.validateConfig(snapshot.draft);
-		}
+		state.validation = root.PathMask.config.validateConfig(snapshot.draft, i18n.t);
 	}
 
 	function updateApplyBar(snapshot) {
@@ -274,7 +278,7 @@
 		const module = root.PathMask.views && root.PathMask.views[view];
 		if (!module || typeof module.render !== "function") return;
 		try {
-			module.render(api);
+			module.render(app);
 		} catch (error) {
 			if (root.console && root.console.error) root.console.error(error);
 			toast(error.message || String(error), "danger");
@@ -365,7 +369,7 @@
 	async function applyChanges(reload) {
 		if (state.busy || !store) return;
 		const draft = store.getDraft();
-		const validation = root.PathMask.config.validateConfig(draft);
+		const validation = root.PathMask.config.validateConfig(draft, i18n.t);
 		state.validation = validation;
 		if (!validation.ok) {
 			toast(validation.errors[0], "danger");

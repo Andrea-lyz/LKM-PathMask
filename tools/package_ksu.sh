@@ -106,13 +106,15 @@ rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$(dirname -- "$OUTPUT")"
 
 cp -R "$TEMPLATE_DIR"/. "$STAGE_DIR"/
+# WebUI unit tests are development-only; keep them out of user zips.
+rm -rf "$STAGE_DIR/webroot/tests"
 cp "$KO_PATH" "$STAGE_DIR/pathmask.ko"
 
 # Optional procguard companion ko (isolated-process gid-3009 strip).
 # Explicit PROCGUARD_KO wins; otherwise auto-detect a sibling of the
 # pathmask ko ("<base>_procguard.ko" or plain "procguard.ko"). Skipped
 # silently when absent -- service.sh tolerates a missing procguard.ko
-# and the WebUI Protection tab then reports it as unavailable.
+# and the WebUI Settings tab then reports it as unavailable.
 if [ -z "${PROCGUARD_KO:-}" ]; then
 	KO_DIR=$(dirname -- "$KO_PATH")
 	KO_BASE=$(basename "$KO_PATH" .ko)

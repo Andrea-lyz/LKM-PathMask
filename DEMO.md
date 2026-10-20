@@ -161,7 +161,7 @@ For late-created `/dev` paths, increase the wait time while packaging:
 
 For very dynamic paths such as `/data/incremental/...`, the path must exist at
 reload time. If boot-time loading skips it, create or trigger the path first,
-then use WebUI `Save & Reload`.
+then use WebUI `Apply and reload`.
 
 Install `out/pathmask-ksu.zip` from KernelSU Manager and reboot. The bundled
 `service.sh` loads `pathmask.ko` only when the target file already exists, which

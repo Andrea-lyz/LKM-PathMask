@@ -151,6 +151,7 @@
 	}
 
 	function renderVerdict(app, diagnostics) {
+		const state = app.getState();
 		const box = document.getElementById("verdictBox");
 		const list = document.getElementById("healthList");
 		const empty = document.getElementById("diagEmpty");
@@ -162,7 +163,7 @@
 			box.textContent = "";
 			list.textContent = "";
 			empty.hidden = false;
-			if (meta) meta.textContent = app.i18n.t("还没有运行诊断。");
+			if (meta) meta.textContent = state.diagError || app.i18n.t("还没有运行诊断。");
 			return;
 		}
 
@@ -200,14 +201,18 @@
 
 		empty.hidden = true;
 		if (meta) {
-			const when = diagnostics.timestamp
-				? new Date(diagnostics.timestamp * 1000).toLocaleString()
-				: new Date().toLocaleString();
-			const label = level === "ok" ? app.i18n.t("通过")
-				: level === "warn" ? app.i18n.t("有提醒")
-					: level === "danger" ? app.i18n.t("有问题")
-						: app.i18n.t("提示");
-			meta.textContent = app.i18n.t("{0} · {1}", [when, label]);
+			if (state.diagError) {
+				meta.textContent = state.diagError;
+			} else {
+				const when = diagnostics.timestamp
+					? new Date(diagnostics.timestamp * 1000).toLocaleString()
+					: new Date().toLocaleString();
+				const label = level === "ok" ? app.i18n.t("通过")
+					: level === "warn" ? app.i18n.t("有提醒")
+						: level === "danger" ? app.i18n.t("有问题")
+							: app.i18n.t("提示");
+				meta.textContent = app.i18n.t("{0} · {1}", [when, label]);
+			}
 		}
 	}
 
@@ -259,12 +264,16 @@
 		const state = app.getState();
 		if (state.diagnosing) return;
 		state.diagnosing = true;
+		state.diagError = "";
 		render(app);
 		const meta = document.getElementById("diagMeta");
 		if (meta) meta.textContent = app.i18n.t("正在读取模块、配置和内核状态...");
 		try {
 			const result = await root.PathMask.diagnostics.collectSnapshot();
 			result.timestamp = Math.floor(Date.now() / 1000);
+			result.level = levelForVerdict(result.verdict.level);
+			result.title = result.verdict.headline;
+			result.detail = (result.verdict.suggestions || []).join(" ");
 			app.setDiagnostics(result);
 			app.setLogs({
 				status: result.snapshot.statusLog || "",
@@ -281,8 +290,8 @@
 				? app.i18n.t("诊断完成，但发现问题")
 				: app.i18n.t("诊断完成"));
 		} catch (error) {
-			app.toast(error.message || app.i18n.t("诊断失败"), "danger");
-			if (meta) meta.textContent = error.message || app.i18n.t("诊断失败");
+			state.diagError = error.message || app.i18n.t("诊断失败");
+			app.toast(state.diagError, "danger");
 		} finally {
 			state.diagnosing = false;
 			render(app);
@@ -298,22 +307,31 @@
 		}
 		try {
 			if (root.navigator && root.navigator.clipboard && root.navigator.clipboard.writeText) {
-				await root.navigator.clipboard.writeText(text);
+				try {
+					await root.navigator.clipboard.writeText(text);
+				} catch (clipboardError) {
+					legacyCopy(text);
+				}
 			} else {
-				const area = document.createElement("textarea");
-				area.value = text;
-				area.setAttribute("readonly", "");
-				area.style.position = "fixed";
-				area.style.opacity = "0";
-				document.body.append(area);
-				area.select();
-				document.execCommand("copy");
-				area.remove();
+				legacyCopy(text);
 			}
 			app.toast(app.i18n.t("报告已复制"));
 		} catch (error) {
 			app.toast(app.i18n.t("复制失败，请长按报告手动复制"), "danger");
 		}
+	}
+
+	function legacyCopy(text) {
+		const area = document.createElement("textarea");
+		area.value = text;
+		area.setAttribute("readonly", "");
+		area.style.position = "fixed";
+		area.style.opacity = "0";
+		document.body.append(area);
+		area.select();
+		const copied = typeof document.execCommand === "function" && document.execCommand("copy");
+		area.remove();
+		if (!copied) throw new Error("copy command failed");
 	}
 
 	async function saveHistory(app, report) {
@@ -328,7 +346,7 @@
 			report,
 			marker,
 			`chmod 0600 '${path}' 2>/dev/null || true`,
-			`ls -1t '${DIAG_HISTORY_DIR}'/diag-*.txt 2>/dev/null | awk -v keep=${DIAG_HISTORY_KEEP} 'NR>keep' | xargs -r rm -f 2>/dev/null || true`,
+			`ls -1t '${DIAG_HISTORY_DIR}'/diag-*.txt 2>/dev/null | awk -v keep=${DIAG_HISTORY_KEEP} 'NR>keep' | xargs rm -f 2>/dev/null || true`,
 			"true",
 		].join("\n");
 		try {

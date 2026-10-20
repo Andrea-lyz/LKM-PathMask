@@ -30,9 +30,11 @@
 	}
 
 	function buildSettingsModel(draft, status = {}, t = (source) => source) {
-		const procguardLabel = draft.procguard ? t("开启") : t("关闭");
+		const procguardLabel = draft.procguard
+			? t("开启")
+			: (status.procguardLoaded ? t("运行中") : t("已关闭"));
 		const procguardNote = !draft.procguard
-			? t("未启用")
+			? (status.procguardLoaded ? t("应用并重载后关闭。") : t("未启用"))
 			: status.procguardLoaded
 				? t("运行中")
 				: t("已启用，等待重载");
@@ -43,14 +45,29 @@
 
 		const scene = status.scene || {};
 		let sceneLabel;
-		if (!scene.enabled) sceneLabel = t("关闭");
-		else if (scene.appliedEnabled) sceneLabel = t("已生效");
-		else sceneLabel = t("已启用，运行中未生效");
-		const sceneNote = scene.enabled
-			? (scene.count
+		let sceneNote;
+		if (draft.autoSceneDebugfs && !scene.enabled) {
+			sceneLabel = t("已启用，等待重载");
+			sceneNote = t("应用并重载后开始识别。");
+		} else if (!draft.autoSceneDebugfs && scene.enabled) {
+			sceneLabel = t("运行中仍启用");
+			sceneNote = scene.count
+				? t("应用并重载后关闭；当前仍会加入 {0} 条路径。", [scene.count])
+				: t("应用并重载后关闭。");
+		} else if (!scene.enabled) {
+			sceneLabel = t("已关闭");
+			sceneNote = t("仅保存，重启后生效。");
+		} else if (scene.appliedEnabled) {
+			sceneLabel = t("已生效");
+			sceneNote = scene.count
 				? t("已加入 {0} 条运行时路径。", [scene.count])
-				: t("还没有发现可用的 debugfs 挂载点。"))
-			: t("仅保存，重启后生效。");
+				: t("还没有发现可用的 debugfs 挂载点。");
+		} else {
+			sceneLabel = t("已启用，运行中未生效");
+			sceneNote = scene.count
+				? t("已加入 {0} 条运行时路径。", [scene.count])
+				: t("还没有发现可用的 debugfs 挂载点。");
+		}
 
 		return {
 			procguardLabel,
@@ -77,7 +94,10 @@
 		const procguard = document.getElementById("procguardEnableInput");
 		if (procguard) {
 			procguard.checked = !!draft.procguard;
-			procguard.onchange = () => app.setDraft({ procguard: procguard.checked });
+			procguard.onchange = () => {
+				app.setDraft({ procguard: procguard.checked });
+				render(app);
+			};
 		}
 		setText("#procguardStats", `${model.procguardLabel} · ${model.procguardNote}`);
 
@@ -123,7 +143,10 @@
 		const autoScene = document.getElementById("autoSceneDebugfsInput");
 		if (autoScene) {
 			autoScene.checked = !!draft.autoSceneDebugfs;
-			autoScene.onchange = () => app.setDraft({ autoSceneDebugfs: autoScene.checked });
+			autoScene.onchange = () => {
+				app.setDraft({ autoSceneDebugfs: autoScene.checked });
+				render(app);
+			};
 		}
 		const sceneStatus = document.getElementById("autoSceneDebugfsStatus");
 		if (sceneStatus) {
@@ -135,8 +158,9 @@
 		if (wait) {
 			wait.value = String(model.waitSeconds);
 			wait.onchange = () => {
-				const parsed = format.parseWaitSeconds(wait.value);
-				if (parsed === format.DEFAULT_WAIT_SECONDS && String(wait.value).trim() !== String(format.DEFAULT_WAIT_SECONDS)) {
+				const raw = String(wait.value).trim();
+				const parsed = Number(raw);
+				if (!/^\d+$/.test(raw) || !Number.isInteger(parsed) || parsed < 1 || parsed > 600) {
 					app.toast(app.i18n.t("等待秒数必须在 1–600 之间"));
 					wait.value = String(app.getDraft().waitSeconds);
 					return;
@@ -151,8 +175,9 @@
 			button.setAttribute("aria-pressed", String(active));
 		}
 
-		const version = state.moduleInfo && state.moduleInfo.version
-			? `v${state.moduleInfo.version}`
+		const rawVersion = state.moduleInfo && state.moduleInfo.version ? String(state.moduleInfo.version).trim() : "";
+		const version = rawVersion
+			? (/^v/i.test(rawVersion) ? rawVersion : `v${rawVersion}`)
 			: (document.getElementById("moduleVersion") ? document.getElementById("moduleVersion").textContent : "—");
 		setText("#aboutVersion", version);
 

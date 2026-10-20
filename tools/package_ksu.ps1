@@ -88,6 +88,8 @@ New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Output) | Out-Null
 
 Copy-Item -Path (Join-Path $TemplateDir "*") -Destination $StageDir -Recurse -Force
+# WebUI unit tests are development-only; keep them out of user zips.
+Remove-Item -LiteralPath (Join-Path $StageDir "webroot/tests") -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath $KoPath -Destination (Join-Path $StageDir "pathmask.ko") -Force
 
 # Optional procguard companion ko (isolated-process gid-3009 strip).

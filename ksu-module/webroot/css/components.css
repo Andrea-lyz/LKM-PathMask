@@ -1629,3 +1629,30 @@
 		max-height: 48vh;
 	}
 }
+
+@media (max-width: 360px) {
+	.applyBar {
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.applySummary {
+		flex: 1 0 100%;
+	}
+
+	.applyActions {
+		width: 100%;
+		justify-content: flex-end;
+	}
+}
+
+/* Fallback for WebViews without :has(), the class is maintained by the views. */
+.choice.is-selected {
+	border-color: var(--pm-accent);
+	background: var(--pm-accent-soft);
+}
+
+.choice.is-selected::before {
+	border: 5px solid var(--pm-accent);
+	background: var(--pm-on-accent);
+}

@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { createStore, cloneValue, diffKeys, valuesEqual } = require("../js/core/store.js");
-const { detectUiLang, translate } = require("../js/core/i18n.js");
+const { applyStaticText, detectUiLang, setLanguageDirect, translate } = require("../js/core/i18n.js");
 
 test("cloneValue copies arrays, sets and nested objects", () => {
 	const source = { list: [1, { a: 2 }], set: new Set(["x"]), nested: { ok: true } };
@@ -78,5 +78,15 @@ test("translate handles Chinese keys, unknown keys and placeholders", () => {
 	assert.equal(translate("zh", "全局"), "全局");
 	assert.equal(translate("en", "已识别：{path}", { path: "/dev/x" }), "Detected: /dev/x");
 	assert.equal(translate("en", "脚本错误：{0} {1}", ["TypeError", "line 2"]), "Script error: TypeError line 2");
-	assert.equal(translate("en", "已选 {0} 个应用", [3]), "已选 3 个应用");
+	assert.equal(translate("en", "已选 {0} 个应用", [3]), "3 app(s) selected");
+});
+
+test("applyStaticText keeps the document language in sync", () => {
+	const doc = { documentElement: { lang: "" }, querySelectorAll: () => [] };
+	setLanguageDirect("en");
+	applyStaticText(doc);
+	assert.equal(doc.documentElement.lang, "en");
+	setLanguageDirect("zh");
+	applyStaticText(doc);
+	assert.equal(doc.documentElement.lang, "zh-CN");
 });

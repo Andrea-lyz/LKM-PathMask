@@ -34,12 +34,16 @@
 		}
 		return rows.map((row) => {
 			const info = infoMap.get(row.pkg);
-			const resolved = !!info && !info.error;
+			// A row is unresolved when the manager explicitly says the package
+			// lookup failed. If getPackagesInfo() is unavailable entirely, the
+			// UID from `pm list packages -U` is still enough to use the app, so
+			// don't blanket-badge every row as unresolved.
+			const resolved = info ? !info.error : /^\d+$/.test(String(row.uid || ""));
 			return {
 				pkg: row.pkg,
 				uid: row.uid,
-				label: resolved && info.appLabel ? String(info.appLabel) : row.pkg,
-				isSystem: resolved ? info.isSystem === true : false,
+				label: info && !info.error && info.appLabel ? String(info.appLabel) : row.pkg,
+				isSystem: info && !info.error ? info.isSystem === true : false,
 				resolved,
 				icon: resolved ? `ksu://icon/${row.pkg}` : "",
 			};

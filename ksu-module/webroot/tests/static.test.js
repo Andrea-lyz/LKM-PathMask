@@ -82,6 +82,32 @@ test("index.html has no external assets and no hardcoded version", () => {
 	assert.doesNotMatch(html, /<(?:script|img|link)[^>]+(?:src|href)="https?:\/\//i);
 	assert.doesNotMatch(html, /v2\.\d+\.\d+/);
 	assert.doesNotMatch(html, /style\.css|src="\.\/app\.js"/);
+	for (const file of ["app.js", "style.css"]) {
+		assert.equal(fs.existsSync(path.join(webroot, file)), false, `legacy ${file} still exists`);
+	}
+});
+
+test("CSS files do not import external assets", () => {
+	for (const file of fs.readdirSync(path.join(webroot, "css"))) {
+		const css = fs.readFileSync(path.join(webroot, "css", file), "utf8");
+		assert.doesNotMatch(css, /@import\s+url\(\s*["']?https?:/i, `${file} imports a remote stylesheet`);
+		assert.doesNotMatch(css, /url\(\s*["']?https?:/i, `${file} references a remote asset`);
+	}
+});
+
+test("index.html local assets exist and IDs are unique", () => {
+	const assets = [...html.matchAll(/(?:href|src)="\.\/([^"]+)"/g)].map((match) => match[1]);
+	assert.ok(assets.includes("PY_QR.png") === false, "QR image is loaded from the donate sheet");
+	assert.ok(assets.length >= 5);
+	for (const asset of assets) {
+		assert.ok(fs.existsSync(path.join(webroot, asset)), `missing local asset ${asset}`);
+	}
+	const seen = new Set();
+	for (const match of html.matchAll(/\bid="([^"]+)"/g)) {
+		assert.equal(seen.has(match[1]), false, `duplicate id ${match[1]}`);
+		seen.add(match[1]);
+	}
+	assert.ok(fs.existsSync(path.join(webroot, "PY_QR.png")), "donate QR image is missing");
 });
 
 test("design tokens cover light/dark and keep a color-mix fallback", () => {

@@ -132,3 +132,14 @@ test("filterApps searches label and package, filters by system and selection", (
 		["com.beta", "com.alpha", "com.zeta"],
 	);
 });
+
+test("mergePackages keeps pm UIDs usable when no info bridge is available", () => {
+	const rows = [
+		{ pkg: "com.a", uid: "10101" },
+		{ pkg: "com.noinfo", uid: "" },
+	];
+	assert.deepEqual(appsModule.mergePackages(rows, []), [
+		{ pkg: "com.a", uid: "10101", label: "com.a", isSystem: false, resolved: true, icon: "ksu://icon/com.a" },
+		{ pkg: "com.noinfo", uid: "", label: "com.noinfo", isSystem: false, resolved: false, icon: "" },
+	]);
+});

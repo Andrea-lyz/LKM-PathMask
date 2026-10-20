@@ -62,3 +62,9 @@ test("normalizeStatus distinguishes loaded, boot-waiting and paused", () => {
 	assert.equal(paused.level, "info");
 	assert.equal(paused.paused, true);
 });
+
+test("buildReloadCommand unloads procguard even when the new config disables it", () => {
+	const command = moduleApi.buildReloadCommand("/data/adb/modules/pathmask/service.sh");
+	assert.match(command, /grep -q '\^procguard ' \/proc\/modules/);
+	assert.doesNotMatch(command, /grep -q '\^1'.*procguard\.conf/);
+});
