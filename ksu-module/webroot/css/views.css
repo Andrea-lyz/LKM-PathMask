@@ -1,0 +1,217 @@
+/*
+ * View-specific layout. Shared controls live in components.css.
+ */
+
+/* ---------- home ---------- */
+
+#homeView {
+	gap: 12px;
+}
+
+#homeView .card + .card {
+	margin-top: 0;
+}
+
+#lastDiagCard .sectionHead {
+	align-items: center;
+}
+
+#lastDiagCard .sectionSub {
+	max-width: 52ch;
+}
+
+/* ---------- targets ---------- */
+
+#targetsView {
+	gap: 12px;
+}
+
+.targetsPane {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.targetsPane[hidden] {
+	display: none;
+}
+
+#targetsView > .pageSegments {
+	position: sticky;
+	top: calc(var(--pm-safe-top) + 63px);
+	z-index: 12;
+}
+
+#pathsSection .hint {
+	margin-top: -2px;
+}
+
+#scopeSection .choiceGrid {
+	margin-top: 2px;
+}
+
+#scopeSection .switchRow {
+	margin-top: 2px;
+}
+
+#appsSection .sectionHead {
+	align-items: center;
+}
+
+#appsSection .sectionSub {
+	margin-top: 2px;
+}
+
+#appsSection .searchBar {
+	margin-top: 2px;
+}
+
+#appSelectionSummary {
+	padding-bottom: 2px;
+}
+
+/* ---------- diagnostics ---------- */
+
+#diagnosticsView {
+	gap: 12px;
+}
+
+#diagnosticsView > .pageSegments {
+	position: sticky;
+	top: calc(var(--pm-safe-top) + 63px);
+	z-index: 12;
+}
+
+.diagPane {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.diagPane[hidden] {
+	display: none;
+}
+
+#verdictSection .emptyState {
+	margin-top: 2px;
+}
+
+#reportSection .monoBox {
+	min-height: 42vh;
+}
+
+/* ---------- settings ---------- */
+
+#settingsView {
+	gap: 12px;
+}
+
+#settingsView .card {
+	gap: 10px;
+}
+
+#settingsView .switchRow:first-of-type {
+	border-top: 0;
+	padding-top: 2px;
+}
+
+#settingsView .switchRow:last-child {
+	padding-bottom: 0;
+}
+
+#settingsView .choiceGrid {
+	margin-top: 1px;
+}
+
+#settingsView .advanced {
+	margin-top: 0;
+}
+
+#settingsView .aboutCard {
+	padding: 14px 16px;
+}
+
+#settingsView .aboutCard .buttonRow {
+	flex-shrink: 0;
+}
+
+#procguardStats {
+	max-width: 52ch;
+}
+
+/* ---------- narrow screens ---------- */
+
+@media (max-width: 360px) {
+	.quickGrid {
+		grid-template-columns: 1fr;
+	}
+
+	.statGrid {
+		gap: 8px;
+	}
+
+	.statCard {
+		padding: 11px;
+	}
+
+	.statValue {
+		font-size: 22px;
+	}
+
+	.hero h2 {
+		font-size: 21px;
+	}
+
+	.applyBar {
+		left: 6px;
+		right: 6px;
+		padding-left: 10px;
+	}
+
+	.applyActions .button {
+		padding: 0 7px;
+		font-size: 11px;
+	}
+
+	.aboutCard {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+}
+
+/* ---------- wider screens ---------- */
+
+@media (min-width: 760px) {
+	#homeView {
+		display: grid;
+		grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+		align-items: start;
+	}
+
+	#statusHero,
+	#issueBanner,
+	.statGrid,
+	#lastDiagCard {
+		grid-column: 1 / -1;
+	}
+
+	#homeView > .card:nth-of-type(1) {
+		grid-column: 1;
+	}
+
+	#homeView > .card:nth-of-type(2) {
+		grid-column: 2;
+	}
+
+	#homeView > .card:nth-of-type(3) {
+		grid-column: 1 / -1;
+	}
+
+	.appList {
+		max-height: 420px;
+	}
+
+	.logBox {
+		max-height: 440px;
+	}
+}
