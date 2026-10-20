@@ -64,3 +64,8 @@ test("not loaded and disabled facts produce a danger check", () => {
 	assert.equal(checks[0].level, "danger");
 	assert.match(checks[0].title, /禁用|未加载/);
 });
+
+test("a missing procguard.ko is a danger check", () => {
+	const checks = buildHealthChecks(facts({ procguardKoMissing: true }), t);
+	assert.equal(checks.some((check) => check.level === "danger" && /procguard\.ko/.test(check.title)), true);
+});

@@ -39,12 +39,22 @@
 		logPage: 0,
 		logWrap: true,
 		validation: { ok: true, errors: [], warnings: [] },
+		pathStatus: null,
+		pathProbing: false,
+		pathProbeSignature: "",
+		pathProbeHidden: false,
+		pathResolvedCount: -1,
 	};
+
+	const BOOT_POLL_INTERVAL_MS = 5000;
+	const BOOT_WAITING_STATES = new Set(["init", "waiting-targets", "waiting-packages"]);
+	const SCENE_WAITING_STATES = new Set(["late-watching", "late-found-pending", "late-reload-retry"]);
 
 	let store = null;
 	let confirmResolver = null;
 	let sheetSaveHandler = null;
 	let toastTimer = null;
+	let bootPollHandle = null;
 	const dom = {};
 
 	function $(selector, scope = document) {
@@ -115,6 +125,11 @@
 			]);
 			applyLoadedData(configResult, status);
 			renderAll();
+			refreshPathProbe(true);
+			scheduleBootPolling();
+			if (!statusWaiting(status)) {
+				refreshDiagnostics({ silent: true, saveHistory: false }).catch(() => {});
+			}
 		} catch (error) {
 			state.status = {
 				...state.status,
@@ -169,12 +184,95 @@
 		if (dom.statusText) dom.statusText.textContent = text;
 	}
 
+	function statusWaiting(status = state.status || {}) {
+		const boot = status.boot || {};
+		const scene = status.scene || {};
+		return BOOT_WAITING_STATES.has(boot.state) || SCENE_WAITING_STATES.has(scene.status);
+	}
+
+	function stopBootPolling() {
+		if (bootPollHandle) {
+			window.clearInterval(bootPollHandle);
+			bootPollHandle = null;
+		}
+	}
+
+	async function refreshDiagnostics(options = {}) {
+		const view = root.PathMask.views && root.PathMask.views.diagnostics;
+		if (!view || typeof view.run !== "function") return;
+		// A page-load or polling diagnosis may still be in flight. Wait for
+		// it instead of letting a stale snapshot overwrite the post-apply one.
+		for (let wait = 0; state.diagnosing && wait < 100; wait += 1) {
+			await new Promise((resolve) => window.setTimeout(resolve, 100));
+		}
+		await view.run(app, options);
+	}
+
+	function refreshPathProbe(force = false) {
+		const view = root.PathMask.views && root.PathMask.views.targets;
+		if (view && typeof view.refreshProbe === "function") view.refreshProbe(app, force);
+	}
+
+	function scheduleBootPolling() {
+		const status = state.status || {};
+		if (!statusWaiting(status)) {
+			stopBootPolling();
+			return;
+		}
+		if (bootPollHandle) return;
+		bootPollHandle = window.setInterval(async () => {
+			if (state.busy) return;
+			const wasWaiting = statusWaiting(state.status || {});
+			try {
+				const next = await root.PathMask.module.probeStatus();
+				state.status = next;
+				updateHeader();
+				renderAll();
+				refreshPathProbe(true);
+				if (!statusWaiting(next)) {
+					stopBootPolling();
+					if (wasWaiting) await refreshDiagnostics({ silent: true, saveHistory: false });
+				}
+			} catch (error) {
+				// Polling is best-effort; leave the last known state visible.
+			}
+		}, BOOT_POLL_INTERVAL_MS);
+	}
+
 	function setBusy(nextBusy, message) {
 		state.busy = nextBusy;
-		for (const button of $$("button.primary, button.danger, #applyBtn, #saveOnlyBtn, #discardBtn")) {
+		for (const button of $$("button")) {
+			if (button.closest("#confirmDialog, #sheet")) continue;
 			button.disabled = nextBusy;
 		}
+		for (const control of $$("input, textarea, select")) {
+			if (control.closest("#confirmDialog, #sheet")) continue;
+			if (nextBusy) {
+				if (control.dataset.busyWasDisabled === undefined) {
+					control.dataset.busyWasDisabled = control.disabled ? "1" : "0";
+				}
+				control.disabled = true;
+			} else if (control.dataset.busyWasDisabled !== undefined) {
+				control.disabled = control.dataset.busyWasDisabled === "1";
+				delete control.dataset.busyWasDisabled;
+			}
+		}
 		if (message) setHeaderStatus(message);
+		if (!nextBusy) renderAll();
+	}
+
+	async function runExclusive(message, action) {
+		if (state.busy) {
+			toast(i18n.t("正在处理，请稍等"));
+			return undefined;
+		}
+		setBusy(true, message);
+		try {
+			return await action();
+		} finally {
+			setBusy(false);
+			updateHeader();
+		}
 	}
 
 	function getDraft() {
@@ -338,9 +436,9 @@
 		}
 	}
 
-	async function refresh() {
-		if (state.busy) return;
-		if (store && store.isDirty()) {
+	async function refresh(options = {}) {
+		if (state.busy && !options.force) return;
+		if (store && store.isDirty() && !options.force) {
 			const ok = await confirm({
 				title: i18n.t("刷新会丢弃未保存的修改"),
 				body: i18n.t("读取磁盘上的配置会覆盖当前草稿。继续吗？"),
@@ -357,9 +455,12 @@
 			]);
 			applyLoadedData(configResult, status);
 			renderAll();
-			toast(i18n.t("已刷新"));
+			refreshPathProbe(true);
+			scheduleBootPolling();
+			if (!options.silent) toast(i18n.t("已刷新"));
 		} catch (error) {
-			toast(error.message || i18n.t("读取失败"), "danger");
+			if (!options.silent) toast(error.message || i18n.t("读取失败"), "danger");
+			if (options.throwOnError) throw error;
 		} finally {
 			setBusy(false);
 			updateHeader();
@@ -387,10 +488,27 @@
 		}
 		setBusy(true, reload ? i18n.t("正在热重载...") : i18n.t("正在保存..."));
 		try {
+			const preflight = await root.PathMask.module.preflightConfig(draft, state.status || {}, {
+				requireModule: reload,
+			});
+			state.validation = {
+				ok: preflight.ok,
+				errors: [...validation.errors, ...preflight.errors],
+				warnings: [...validation.warnings, ...preflight.warnings],
+			};
+			if (!preflight.ok) {
+				toast(preflight.errors[0], "danger");
+				navigate("targets");
+				return;
+			}
 			let status;
+			let warning = preflight.warnings[0] || "";
 			if (reload) {
 				const result = await root.PathMask.module.reloadModule(draft);
 				status = result.status;
+				if (result.output) {
+					setLogs({ ...state.logs, kernel: result.output });
+				}
 			} else {
 				await root.PathMask.module.saveOnly(draft);
 				status = await root.PathMask.module.probeStatus();
@@ -399,8 +517,24 @@
 			state.status = status;
 			updateHeader();
 			renderAll();
-			toast(reload ? i18n.t("热重载完成") : i18n.t("已保存，重启后生效"));
+			refreshPathProbe(true);
+			scheduleBootPolling();
+			await refreshDiagnostics({ silent: true, saveHistory: false });
+			const notLoaded = reload && !status.loaded && !status.waiting && !status.paused;
+			const message = notLoaded
+				? i18n.t("热重载完成，但模块未加载")
+				: (reload ? i18n.t("热重载完成") : i18n.t("已保存，重启后生效"));
+			if (warning && !notLoaded) warning = `${message} · ${warning}`;
+			toast(notLoaded ? message : (warning || message), notLoaded ? "danger" : "");
 		} catch (error) {
+			try {
+				state.status = await root.PathMask.module.probeStatus();
+				updateHeader();
+				renderAll();
+				refreshPathProbe(true);
+			} catch (probeError) {
+				// Keep the original error visible.
+			}
 			toast(error.message || String(error), "danger");
 		} finally {
 			setBusy(false);
@@ -512,8 +646,11 @@
 		navigate,
 		openSheet,
 		refresh,
+		refreshDiagnostics,
+		refreshPathProbe,
 		renderAll,
 		renderView,
+		runExclusive,
 		setDiagTab,
 		setDiagnostics,
 		setDraft,

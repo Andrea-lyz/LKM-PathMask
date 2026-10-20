@@ -142,17 +142,23 @@
 
 		for (const item of config.paths || []) {
 			const path = text(item.path).trim();
-			if (!path) continue;
+			if (!path) {
+				errors.push(t("路径不能为空"));
+				continue;
+			}
+			const key = format.joinTargetLine(path, item.useParent, item.group);
 			if (!path.startsWith("/")) {
 				errors.push(t("路径必须是绝对路径：{0}", [path]));
 			}
 			if (/\s/.test(path)) {
 				errors.push(t("路径不能包含空白字符：{0}", [path]));
 			}
+			if (key.includes(",")) {
+				errors.push(t("隐藏路径不能包含英文逗号：{0}", [key]));
+			}
 			if (item.group && /[\s:]/.test(item.group)) {
 				errors.push(t("OR 组名不能包含空格或冒号：{0}", [item.group]));
 			}
-			const key = format.joinTargetLine(path, item.useParent, item.group);
 			if (seen.has(key)) errors.push(t("路径重复：{0}", [key]));
 			seen.add(key);
 		}
@@ -169,14 +175,14 @@
 			errors.push(t("等待秒数必须在 1–600 之间"));
 		}
 
-		if (!(config.paths || []).length) {
-			warnings.push(t("还没有隐藏路径，模块加载后不会隐藏任何文件。"));
+		if (!(config.paths || []).length && !config.autoSceneDebugfs) {
+			errors.push(t("隐藏路径为空。"));
 		}
-		if (config.scope === "allow" && !(config.allowPackages || new Set()).size && !(config.allowUids || []).length) {
-			warnings.push(t("白名单模式没有选择任何应用或 UID，所有应用都会被隐藏。"));
+		if (config.scope === "allow" && !(config.allowPackages || new Set()).size && !(config.allowUids || []).length && !(config.allowSystemUids || new Set()).size) {
+			errors.push(t("白名单模式下至少需要选择一个包名、填写一个 UID，或勾选系统 UID 放行。"));
 		}
 		if (config.scope === "deny" && !(config.denyPackages || new Set()).size && !(config.denyUids || []).length) {
-			warnings.push(t("黑名单模式没有选择任何应用或 UID，隐藏不会作用于任何应用。"));
+			errors.push(t("黑名单模式下至少需要选择一个包名或填写一个 UID。"));
 		}
 		if (config.scope === "global" && ((config.denyPackages || new Set()).size || (config.allowPackages || new Set()).size)) {
 			warnings.push(t("全局模式会忽略应用列表；已选应用会保留但不参与判断。"));

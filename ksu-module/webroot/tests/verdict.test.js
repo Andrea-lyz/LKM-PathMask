@@ -146,3 +146,15 @@ test("buildReport contains the verdict, key facts and raw sections", () => {
 	assert.match(report, /=== dmesg pathmask 相关 ===/);
 	assert.match(report, /scope_mode=deny/);
 });
+
+test("enabled procguard with a missing procguard.ko is a warning", () => {
+	const verdict = computeVerdict(healthyFacts({ procguard: true, procguardKoMissing: true }));
+	assert.equal(verdict.level, "warn");
+	assert.match(verdict.headline, /procguard\.ko/);
+});
+
+test("buildReport without a snapshot keeps the copyable stub", () => {
+	const report = buildReport();
+	assert.match(report, /PathMask 诊断报告/);
+	assert.match(report, /生成诊断/);
+});

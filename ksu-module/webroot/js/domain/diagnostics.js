@@ -508,6 +508,7 @@ true
 		allowSystemUids: confAllowSystemUids,
 		procguard: parseBoolish(snapshot.procguardConfText, false),
 		procguardLoaded: /^procguard\s/m.test(String(snapshot.procguardModuleText || "")),
+		procguardKoMissing: String(snapshot.procguardKoInfo || "").trim() !== "present",
 	};
 }
 
@@ -553,6 +554,16 @@ function computeVerdict(facts) {
 					t("剩余路径在加载时不存在，被内核 skip 了。"),
 					t("看「dmesg pathmask 相关」段里 'not found (err=...)' 行确认是哪一条。"),
 					t("如果是带 ??? 的 glob 行匹配不到，是预期的（路径未生成）；如果是字面路径，多半拼错了或路径被系统改过。"),
+				],
+			};
+		}
+		if (facts.procguard && facts.procguardKoMissing) {
+			return {
+				level: FACT_WARN,
+				headline: t("隔离防护已启用，但 procguard.ko 缺失"),
+				suggestions: [
+					t("当前模块包未包含 procguard.ko，隔离防护无法加载。"),
+					t("重新刷入包含 procguard.ko 的模块包，或在设置中关闭隔离防护。"),
 				],
 			};
 		}
@@ -1077,9 +1088,9 @@ function buildProcguardSection(snapshot) {
 	return lines.join("\n");
 }
 
-function buildReport(snapshot = lastSnapshot) {
-	const facts = snapshot.facts;
-	const verdict = snapshot.verdict;
+function buildReport(snapshot = null) {
+	const facts = snapshot && snapshot.facts;
+	const verdict = snapshot && snapshot.verdict;
 	if (!facts || !verdict) {
 		// First call before refreshDiagnostics has populated facts.
 		// Return a stub so the textarea isn't empty.

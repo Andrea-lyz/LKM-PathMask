@@ -18,8 +18,9 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function (root, format) {
 	"use strict";
 
-	const DIAG_HISTORY_DIR = "/data/adb/pathmask/diagnostics";
-	const DIAG_HISTORY_KEEP = 10;
+	const DIAG_HISTORY_DIR = "/data/adb/pathmask/diag-history";
+	const LEGACY_DIAG_HISTORY_DIR = "/data/adb/pathmask/diagnostics";
+	const DIAG_HISTORY_KEEP = 5;
 
 	function levelForVerdict(level) {
 		if (level === "bad") return "danger";
@@ -49,6 +50,9 @@
 
 		if (facts.koMissing) {
 			checks.push(check("danger", t("模块文件缺失"), t("找不到 pathmask.ko，重新刷入模块。")));
+		}
+		if (facts.procguardKoMissing) {
+			checks.push(check("danger", t("procguard.ko 缺失"), t("模块包缺少 procguard.ko，隔离防护不可用。")));
 		}
 		if (facts.failCount >= 3) {
 			checks.push(check("danger", t("连续加载失败"), t("失败计数为 {0}；检查内核版本和 dmesg。", [facts.failCount])));
@@ -260,9 +264,10 @@
 		if (report) report.value = diagnostics && diagnostics.report ? diagnostics.report : "";
 	}
 
-	async function run(app) {
+	async function run(app, options = {}) {
 		const state = app.getState();
 		if (state.diagnosing) return;
+		const silent = options.silent === true;
 		state.diagnosing = true;
 		state.diagError = "";
 		render(app);
@@ -285,22 +290,22 @@
 			});
 			state.logPage = 0;
 			app.renderAll();
-			await saveHistory(app, result.report);
-			app.toast(levelForVerdict(result.verdict.level) === "danger"
-				? app.i18n.t("诊断完成，但发现问题")
-				: app.i18n.t("诊断完成"));
+			if (options.saveHistory !== false) await saveHistory(app, result.report);
+			if (!silent) {
+				app.toast(levelForVerdict(result.verdict.level) === "danger"
+					? app.i18n.t("诊断完成，但发现问题")
+					: app.i18n.t("诊断完成"));
+			}
 		} catch (error) {
 			state.diagError = error.message || app.i18n.t("诊断失败");
-			app.toast(state.diagError, "danger");
+			if (!silent) app.toast(state.diagError, "danger");
 		} finally {
 			state.diagnosing = false;
 			render(app);
 		}
 	}
 
-	async function copyReport(app) {
-		const diagnostics = app.getState().diagnostics;
-		const text = diagnostics && diagnostics.report ? diagnostics.report : "";
+	async function copyText(app, text, successMessage) {
 		if (!text) {
 			app.toast(app.i18n.t("还没有可复制的报告"));
 			return;
@@ -315,10 +320,16 @@
 			} else {
 				legacyCopy(text);
 			}
-			app.toast(app.i18n.t("报告已复制"));
+			app.toast(successMessage || app.i18n.t("报告已复制"));
 		} catch (error) {
 			app.toast(app.i18n.t("复制失败，请长按报告手动复制"), "danger");
 		}
+	}
+
+	async function copyReport(app) {
+		const diagnostics = app.getState().diagnostics;
+		const text = diagnostics && diagnostics.report ? diagnostics.report : "";
+		await copyText(app, text, app.i18n.t("报告已复制"));
 	}
 
 	function legacyCopy(text) {
@@ -356,16 +367,30 @@
 		}
 	}
 
+	function historyLabel(file) {
+		const match = String(file || "").match(/diag-(\d+)\.txt$/);
+		if (!match) return String(file || "").split("/").pop();
+		const date = new Date(Number(match[1]) * 1000);
+		return Number.isNaN(date.getTime()) ? String(file).split("/").pop() : date.toLocaleString();
+	}
+
 	async function openHistory(app) {
 		if (!app.bridge) return;
 		let output = "";
 		try {
-			output = await app.bridge.execShell(`ls -1t '${DIAG_HISTORY_DIR}'/diag-*.txt 2>/dev/null || true`);
+			output = await app.bridge.execShell(
+				`ls -1t '${DIAG_HISTORY_DIR}'/diag-*.txt '${LEGACY_DIAG_HISTORY_DIR}'/diag-*.txt 2>/dev/null || true`,
+			);
 		} catch (error) {
 			app.toast(error.message || app.i18n.t("读取历史失败"), "danger");
 			return;
 		}
-		const files = String(output || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+		const files = [...new Set(String(output || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean))]
+			.sort((a, b) => {
+				const ea = Number((a.match(/diag-(\d+)\.txt$/) || [])[1] || 0);
+				const eb = Number((b.match(/diag-(\d+)\.txt$/) || [])[1] || 0);
+				return eb - ea;
+			});
 		const content = document.createElement("div");
 		content.className = "sheetForm";
 		if (!files.length) {
@@ -381,16 +406,25 @@
 				button.type = "button";
 				button.className = "button ghost";
 				button.style.justifyContent = "flex-start";
-				button.textContent = file.split("/").pop();
+				button.textContent = historyLabel(file);
+				button.title = file;
 				button.onclick = async () => {
 					try {
 						const text = await app.bridge.execShell(`cat '${file}' 2>/dev/null || true`);
+						const wrapper = document.createElement("div");
+						wrapper.className = "sheetForm";
 						const area = document.createElement("textarea");
 						area.className = "monoBox";
 						area.style.minHeight = "50vh";
 						area.readOnly = true;
 						area.value = text;
-						app.openSheet({ title: file.split("/").pop(), content: area, hideActions: true });
+						const copy = document.createElement("button");
+						copy.type = "button";
+						copy.className = "button ghost";
+						copy.textContent = app.i18n.t("复制");
+						copy.onclick = () => copyText(app, text, app.i18n.t("已复制"));
+						wrapper.append(area, copy);
+						app.openSheet({ title: historyLabel(file), content: wrapper, hideActions: true });
 					} catch (error2) {
 						app.toast(error2.message || app.i18n.t("读取历史失败"), "danger");
 					}

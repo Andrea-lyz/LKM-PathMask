@@ -121,3 +121,8 @@ relative/path
 	assert.match(result.errors.join("\n"), /绝对路径/);
 	assert.match(result.errors.join("\n"), /重复/);
 });
+
+test("validatePathDraft rejects commas because service.sh splits targets on them", () => {
+	const errors = validatePathDraft({ path: "/a,b", group: "", useParent: false }, [], -1);
+	assert.match(errors.join("\n"), /英文逗号/);
+});

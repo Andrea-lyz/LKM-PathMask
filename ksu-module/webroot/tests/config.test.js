@@ -117,3 +117,40 @@ test("validateConfig accepts a healthy global config with no app list", () => {
 	assert.equal(result.ok, true);
 	assert.deepEqual(result.errors, []);
 });
+
+test("validateConfig rejects commas and empty paths, and requires an effective target list", () => {
+	const comma = validateConfig(configFromTexts({ targets: "/a,b\n", scope: "global" }));
+	assert.equal(comma.ok, false);
+	assert.match(comma.errors.join("\n"), /英文逗号/);
+
+	const emptyPath = validateConfig(configFromTexts({ targets: "", scope: "global" }));
+	assert.equal(emptyPath.ok, false);
+	assert.match(emptyPath.errors.join("\n"), /隐藏路径为空/);
+
+	const base = configFromTexts({ targets: "/a\n", scope: "deny" });
+	const emptyDeny = validateConfig({ ...base, denyPackages: new Set(), denyUids: [] });
+	assert.equal(emptyDeny.ok, false);
+	assert.match(emptyDeny.errors.join("\n"), /黑名单模式/);
+
+	const emptyAllow = validateConfig(configFromTexts({
+		targets: "/a\n",
+		scope: "allow",
+		allowSystemUids: "",
+	}));
+	assert.equal(emptyAllow.ok, false);
+	assert.match(emptyAllow.errors.join("\n"), /白名单模式/);
+
+	const allowedBySystemUid = validateConfig(configFromTexts({
+		targets: "/a\n",
+		scope: "allow",
+		allowSystemUids: "0",
+	}));
+	assert.equal(allowedBySystemUid.ok, true);
+
+	const autoScene = validateConfig(configFromTexts({
+		targets: "",
+		scope: "global",
+		autoSceneDebugfs: "1",
+	}));
+	assert.equal(autoScene.ok, true);
+});

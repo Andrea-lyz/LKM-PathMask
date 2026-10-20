@@ -68,3 +68,98 @@ test("buildReloadCommand unloads procguard even when the new config disables it"
 	assert.match(command, /grep -q '\^procguard ' \/proc\/modules/);
 	assert.doesNotMatch(command, /grep -q '\^1'.*procguard\.conf/);
 });
+
+function fakeBridge(handler) {
+	const commands = [];
+	return {
+		commands,
+		safeExec: async (command) => {
+			commands.push(command);
+			return handler(command);
+		},
+	};
+}
+
+test("buildReloadCommand propagates service.sh failure after printing dmesg", () => {
+	const command = moduleApi.buildReloadCommand("/data/adb/modules/pathmask/service.sh");
+	assert.match(command, /rc=\$\?/);
+	assert.match(command, /service\.sh failed \(exit \$rc\)/);
+	assert.match(command, /exit "\$rc"/);
+});
+
+test("preflightConfig blocks a missing module file and warns about missing targets and packages", async () => {
+	const missingKo = await moduleApi.preflightConfig(
+		{ paths: [], scope: "global", allowPackages: new Set(), denyPackages: new Set() },
+		{},
+		{
+			requireModule: true,
+			bridge: fakeBridge((command) => command.includes("pathmask.ko") ? "missing" : ""),
+		},
+	);
+	assert.equal(missingKo.ok, false);
+	assert.match(missingKo.errors.join("\n"), /pathmask\.ko/);
+
+	const bridge = fakeBridge((command) => {
+		if (command.includes("pathmask.ko")) return "present";
+		if (command.includes("packages.list")) return "MISS com.missing";
+		if (command.includes("[ -e ") || command.includes("ls -d ")) return "0=0";
+		return "";
+	});
+	const warning = await moduleApi.preflightConfig(
+		{
+			paths: [{ path: "/missing", useParent: false, group: "" }],
+			scope: "deny",
+			allowPackages: new Set(),
+			denyPackages: new Set(["com.missing"]),
+		},
+		{ loaded: false },
+		{ requireModule: true, bridge },
+	);
+	assert.equal(warning.ok, true);
+	assert.equal(warning.warnings.length, 2);
+	assert.match(warning.warnings.join("\n"), /隐藏路径/);
+	assert.match(warning.warnings.join("\n"), /包名/);
+});
+
+test("preflightConfig does not stat paths that a loaded global/allow module may hide", async () => {
+	const bridge = fakeBridge((command) => {
+		if (command.includes("[ -e ") || command.includes("ls -d ")) throw new Error("stat should be skipped");
+		return "";
+	});
+	const result = await moduleApi.preflightConfig(
+		{ paths: [{ path: "/hidden", useParent: false, group: "" }], scope: "global", allowPackages: new Set(), denyPackages: new Set() },
+		{ loaded: true },
+		{ bridge },
+	);
+	assert.equal(result.ok, true);
+	assert.deepEqual(bridge.commands, []);
+
+	const partial = await moduleApi.preflightConfig(
+		{
+			paths: [
+				{ path: "/one", useParent: false, group: "" },
+				{ path: "/two", useParent: false, group: "" },
+			],
+			scope: "global",
+			allowPackages: new Set(),
+			denyPackages: new Set(),
+		},
+		{ loaded: true, resolvedCount: 1 },
+		{ bridge },
+	);
+	assert.equal(partial.warnings.length, 1);
+	assert.match(partial.warnings[0], /1\/2/);
+});
+
+test("probeStatus reports procguard.ko availability and kernel resolved_count", async () => {
+	const bridge = fakeBridge((command) => {
+		if (command.includes("grep '^pathmask '")) return "pathmask 123 0 - Live 0x0";
+		if (command.includes("procguard.ko")) return "missing";
+		if (command.includes("resolved_count")) return "3";
+		return "";
+	});
+	const status = await moduleApi.probeStatus({ bridge });
+	assert.equal(status.loaded, true);
+	assert.equal(status.procguardKo, "missing");
+	assert.equal(status.resolvedCount, 3);
+});

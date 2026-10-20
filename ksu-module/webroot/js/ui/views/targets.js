@@ -32,7 +32,9 @@
 		if (!path) return [t("路径不能为空")];
 		if (!path.startsWith("/")) errors.push(t("路径必须是绝对路径：{0}", [path]));
 		if (/\s/.test(path)) errors.push(t("路径不能包含空白字符：{0}", [path]));
+		if (path.includes(",")) errors.push(t("隐藏路径不能包含英文逗号：{0}", [path]));
 		if (group && /[\s:]/.test(group)) errors.push(t("OR 组名不能包含空格或冒号：{0}", [group]));
+		if (group.includes(",")) errors.push(t("隐藏路径不能包含英文逗号：{0}", [group]));
 		const key = format.joinTargetLine(path, candidate.useParent, group);
 		(paths || []).forEach((item, index) => {
 			if (index === editingIndex) return;
@@ -189,6 +191,15 @@
 			const probe = state.pathStatus ? state.pathStatus.get(index) : undefined;
 			if (errors.length) {
 				badges.append(badge(errors[0], "invalid"));
+			} else if (state.pathProbeHidden) {
+				const resolved = Number.isFinite(state.pathResolvedCount) ? state.pathResolvedCount : -1;
+				if (resolved >= paths.length) {
+					badges.append(badge(app.i18n.t("已由内核隐藏"), "exists"));
+				} else if (resolved >= 0) {
+					badges.append(badge(app.i18n.t("内核解析 {0}/{1}", [resolved, paths.length]), ""));
+				} else {
+					badges.append(badge(app.i18n.t("无法探测"), ""));
+				}
 			} else if (probe === true) {
 				badges.append(badge(app.i18n.t("存在"), "exists"));
 			} else if (probe === false) {
@@ -265,15 +276,16 @@
 
 		const allowRow = document.getElementById("allowSystemUidsRow");
 		if (allowRow) allowRow.hidden = scope !== "allow";
-		const allowSystem = document.getElementById("allowSystemUidsInput");
-		if (allowSystem) {
-			allowSystem.checked = !!(draft.allowSystemUids && [...format.DEFAULT_ALLOW_SYSTEM_UIDS].every((uid) => draft.allowSystemUids.has(uid)));
-			allowSystem.onchange = () => {
-				app.setDraft({
-					allowSystemUids: allowSystem.checked
-						? new Set(format.DEFAULT_ALLOW_SYSTEM_UIDS)
-						: new Set(),
-				});
+		for (const input of document.querySelectorAll("[data-allow-system-uid]")) {
+			const uid = String(input.dataset.allowSystemUid || "");
+			const selected = new Set(draft.allowSystemUids || []);
+			input.checked = selected.has(uid);
+			input.disabled = scope !== "allow";
+			input.onchange = () => {
+				const next = new Set(app.getDraft().allowSystemUids || []);
+				if (input.checked) next.add(uid);
+				else next.delete(uid);
+				app.setDraft({ allowSystemUids: next });
 			};
 		}
 
@@ -429,15 +441,27 @@
 		}
 	}
 
-	async function probePaths(app) {
+	async function probePaths(app, force = false) {
 		const state = app.getState();
 		const draft = app.getDraft();
 		if (!draft || !app.bridge) return;
 		const paths = draft.paths || [];
 		const signature = JSON.stringify(paths.map((item) => [item.path, item.useParent, item.group]));
-		if (state.pathProbeSignature === signature) return;
+		if (!force && state.pathProbeSignature === signature) return;
 		state.pathProbing = true;
 		try {
+			const status = state.status || {};
+			const scope = format.normalizeScope(draft.scope);
+			if (status.loaded && (scope === "global" || scope === "allow")) {
+				state.pathProbeHidden = true;
+				state.pathResolvedCount = Number.isFinite(status.resolvedCount) ? status.resolvedCount : -1;
+				state.pathStatus = new Map();
+				state.pathProbeSignature = signature;
+				renderPaths(app, app.getDraft(), state);
+				return;
+			}
+			state.pathProbeHidden = false;
+			state.pathResolvedCount = -1;
 			const output = await app.bridge.execShell(buildPathProbeCommand(paths));
 			state.pathStatus = parsePathProbe(output);
 			state.pathProbeSignature = signature;
@@ -448,6 +472,12 @@
 		} finally {
 			state.pathProbing = false;
 		}
+	}
+
+	function refreshProbe(app, force = true) {
+		const state = app.getState();
+		state.pathProbeSignature = "";
+		return probePaths(app, force);
 	}
 
 	async function loadApps(app, force = false) {
@@ -466,13 +496,26 @@
 				}).filter(Boolean);
 			}
 			let infos = [];
-			if (app.bridge.detectCapabilities().getPackagesInfo) {
+			const hasInfoBridge = app.bridge.detectCapabilities().getPackagesInfo;
+			if (hasInfoBridge) {
 				for (const chunk of appsApi.chunks(rows.map((row) => row.pkg), 50)) {
 					const result = app.bridge.getPackagesInfo(chunk);
 					if (Array.isArray(result)) infos = infos.concat(result);
 				}
 			}
-			state.apps = appsApi.mergePackages(rows, infos);
+			let userPackages = null;
+			if (!infos.length) {
+				const userOutput = await app.bridge.execShell("pm list packages -U -3 2>/dev/null || pm list packages -3 2>/dev/null || true");
+				let userRows = appsApi.parsePackageList(userOutput);
+				if (!userRows.length) {
+					userRows = String(userOutput || "").split(/\r?\n/)
+						.map((line) => line.trim().match(/^package:(.+)$/))
+						.filter(Boolean)
+						.map((match) => ({ pkg: match[1], uid: "" }));
+				}
+				if (userRows.length) userPackages = new Set(userRows.map((row) => row.pkg));
+			}
+			state.apps = appsApi.mergePackages(rows, infos, userPackages);
 			state.appsLoaded = true;
 			state.appQuery = state.appQuery || "";
 		} catch (error) {
@@ -607,6 +650,7 @@
 		parseBulkPaths,
 		parsePathProbe,
 		probePaths,
+		refreshProbe,
 		removePath,
 		render,
 		scopeCopy,

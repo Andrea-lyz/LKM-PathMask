@@ -160,3 +160,26 @@ test("EN_TEXT only keeps translations referenced by the current UI", () => {
 	const unused = keys.filter((key) => !source.includes(key));
 	assert.deepEqual(unused, []);
 });
+
+test("dark mode large surfaces are pure black and on-colors stay readable", () => {
+	const tokens = fs.readFileSync(path.join(webroot, "css", "tokens.css"), "utf8");
+	const dark = tokens.slice(tokens.indexOf("@media (prefers-color-scheme: dark)"));
+	for (const token of ["bg", "surface", "surface-2", "surface-3"]) {
+		assert.match(dark, new RegExp(`--pm-${token}: #000000`), `${token} is not pure black`);
+	}
+	for (const token of ["on-danger", "on-warning", "on-success"]) {
+		assert.match(tokens, new RegExp(`--pm-${token}:`), `${token} is missing`);
+	}
+});
+
+test("allow-system UIDs are individually selectable and history keeps the old location", () => {
+	assert.equal(countMatches(html, /data-allow-system-uid="(?:0|1000|2000)"/g), 3);
+	assert.doesNotMatch(html, /allowSystemUidsInput/);
+	const view = fs.readFileSync(path.join(webroot, "js", "ui", "views", "diagnostics.js"), "utf8");
+	assert.match(view, /DIAG_HISTORY_DIR = "\/data\/adb\/pathmask\/diag-history"/);
+	assert.match(view, /LEGACY_DIAG_HISTORY_DIR = "\/data\/adb\/pathmask\/diagnostics"/);
+	assert.match(view, /DIAG_HISTORY_KEEP = 5/);
+	const app = fs.readFileSync(path.join(webroot, "js", "ui", "app.js"), "utf8");
+	assert.match(app, /BOOT_POLL_INTERVAL_MS = 5000/);
+	assert.match(app, /runExclusive/);
+});

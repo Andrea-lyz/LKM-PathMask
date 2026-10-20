@@ -30,14 +30,19 @@
 	}
 
 	function buildSettingsModel(draft, status = {}, t = (source) => source) {
-		const procguardLabel = draft.procguard
-			? t("开启")
-			: (status.procguardLoaded ? t("运行中") : t("已关闭"));
-		const procguardNote = !draft.procguard
-			? (status.procguardLoaded ? t("应用并重载后关闭。") : t("未启用"))
-			: status.procguardLoaded
-				? t("运行中")
-				: t("已启用，等待重载");
+		const procguardUnavailable = status.procguardKo === "missing";
+		const procguardLabel = procguardUnavailable
+			? t("不可用")
+			: draft.procguard
+				? t("开启")
+				: (status.procguardLoaded ? t("运行中") : t("已关闭"));
+		const procguardNote = procguardUnavailable
+			? t("模块包缺少 procguard.ko，隔离防护不可用。")
+			: !draft.procguard
+				? (status.procguardLoaded ? t("应用并重载后关闭。") : t("未启用"))
+				: status.procguardLoaded
+					? t("运行中")
+					: t("已启用，等待重载");
 		const syscallCount = draft.syscallEnabled ? (draft.syscallHooks ? draft.syscallHooks.size : 0) : 0;
 		const syscallNote = draft.syscallEnabled
 			? t("已选 {0} 个入口", [syscallCount])
@@ -72,6 +77,7 @@
 		return {
 			procguardLabel,
 			procguardNote,
+			procguardUnavailable,
 			syscallCount,
 			syscallNote,
 			sceneLabel,
@@ -94,7 +100,9 @@
 		const procguard = document.getElementById("procguardEnableInput");
 		if (procguard) {
 			procguard.checked = !!draft.procguard;
+			procguard.disabled = model.procguardUnavailable;
 			procguard.onchange = () => {
+				if (model.procguardUnavailable) return;
 				app.setDraft({ procguard: procguard.checked });
 				render(app);
 			};
@@ -189,7 +197,16 @@
 		if (donate) donate.onclick = () => openDonate(app);
 	}
 
+	function withBusy(app, message, action) {
+		if (app && typeof app.runExclusive === "function") return app.runExclusive(message, action);
+		return action();
+	}
+
 	async function pauseHiding(app) {
+		if (app.getState && app.getState().busy) {
+			app.toast(app.i18n.t("正在处理，请稍等"));
+			return;
+		}
 		const ok = await app.confirm({
 			title: app.i18n.t("暂停隐藏"),
 			body: app.i18n.t("这会立刻卸载 pathmask 内核模块，隐藏路径会恢复可见，直到你重新应用或重启。继续吗？"),
@@ -197,9 +214,18 @@
 		});
 		if (!ok) return;
 		try {
-			const result = await root.PathMask.module.pauseHiding();
-			app.getState().status = result.status;
-			app.renderAll();
+			await withBusy(app, app.i18n.t("正在暂停隐藏..."), async () => {
+				const result = await root.PathMask.module.pauseHiding();
+				if (result.output && typeof app.setLogs === "function") {
+					app.setLogs({ ...(app.getState().logs || {}), kernel: result.output });
+				}
+				app.getState().status = result.status;
+				app.renderAll();
+				if (typeof app.refreshPathProbe === "function") app.refreshPathProbe(true);
+				if (typeof app.refreshDiagnostics === "function") {
+					await app.refreshDiagnostics({ silent: true, saveHistory: false });
+				}
+			});
 			app.toast(app.i18n.t("已暂停隐藏"));
 		} catch (error) {
 			app.toast(error.message || app.i18n.t("暂停失败"), "danger");
@@ -207,6 +233,10 @@
 	}
 
 	async function restoreDefaults(app) {
+		if (app.getState && app.getState().busy) {
+			app.toast(app.i18n.t("正在处理，请稍等"));
+			return;
+		}
 		const ok = await app.confirm({
 			title: app.i18n.t("恢复默认配置"),
 			body: app.i18n.t("路径、范围、应用列表和所有高级选项都会恢复为模块默认值。当前草稿会丢失。"),
@@ -214,10 +244,12 @@
 		});
 		if (!ok) return;
 		try {
-			await root.PathMask.module.restoreDefaults();
-			const state = app.getState();
-			if (state.store) state.store.resetDraft();
-			await app.refresh();
+			await withBusy(app, app.i18n.t("正在恢复默认配置..."), async () => {
+				await root.PathMask.module.restoreDefaults();
+				const state = app.getState();
+				if (state.store) state.store.resetDraft();
+				await app.refresh({ force: true, silent: true, throwOnError: true });
+			});
 			app.toast(app.i18n.t("已恢复默认配置"));
 		} catch (error) {
 			app.toast(error.message || app.i18n.t("恢复默认失败"), "danger");

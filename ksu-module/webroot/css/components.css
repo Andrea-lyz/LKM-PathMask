@@ -121,7 +121,7 @@
 .button.danger {
 	border-color: var(--pm-danger);
 	background: var(--pm-danger);
-	color: #ffffff;
+	color: var(--pm-on-danger);
 }
 
 .button.small {
@@ -261,7 +261,7 @@
 
 .hero[data-level="ok"] .badge {
 	background: var(--pm-success);
-	color: #ffffff;
+	color: var(--pm-on-success);
 }
 
 .hero[data-level="warn"] {
@@ -271,7 +271,7 @@
 
 .hero[data-level="warn"] .badge {
 	background: var(--pm-warning);
-	color: #ffffff;
+	color: var(--pm-on-warning);
 }
 
 .hero[data-level="danger"] {
@@ -281,7 +281,7 @@
 
 .hero[data-level="danger"] .badge {
 	background: var(--pm-danger);
-	color: #ffffff;
+	color: var(--pm-on-danger);
 }
 
 .hero[data-level="danger"] .heroDetail,
@@ -366,7 +366,7 @@
 	place-items: center;
 	border-radius: 50%;
 	background: var(--pm-warning);
-	color: #ffffff;
+	color: var(--pm-on-warning);
 	font-weight: 800;
 	font-size: 15px;
 }
@@ -1535,7 +1535,7 @@
 
 .toast.danger {
 	background: var(--pm-danger);
-	color: #ffffff;
+	color: var(--pm-on-danger);
 }
 
 @keyframes toastIn {

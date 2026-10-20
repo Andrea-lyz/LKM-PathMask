@@ -142,3 +142,14 @@ test("settings model marks a running procguard as pending removal", () => {
 	assert.equal(model.procguardLabel, "运行中");
 	assert.equal(model.procguardNote, "应用并重载后关闭。");
 });
+
+test("settings model disables procguard when procguard.ko is missing", () => {
+	const model = buildSettingsModel(draft({ procguard: true }), {
+		procguardLoaded: false,
+		procguardKo: "missing",
+		scene: { enabled: 0, appliedEnabled: 0, status: "", count: 0, detail: "" },
+	}, t);
+	assert.equal(model.procguardUnavailable, true);
+	assert.equal(model.procguardLabel, "不可用");
+	assert.match(model.procguardNote, /procguard\.ko/);
+});

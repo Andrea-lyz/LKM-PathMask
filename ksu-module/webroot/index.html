@@ -213,13 +213,15 @@
 								<span data-i18n>UID 列表</span>
 								<textarea id="uidInput" rows="4" spellcheck="false" placeholder="每行一个 UID" data-i18n-placeholder></textarea>
 							</label>
-							<label class="switchRow" id="allowSystemUidsRow">
-								<span>
-									<strong data-i18n>放行系统 UID</strong>
-									<small class="hint" data-i18n>仅白名单模式生效：root、system、shell 不被隐藏。</small>
-								</span>
-								<input id="allowSystemUidsInput" type="checkbox">
-							</label>
+							<div id="allowSystemUidsRow">
+								<p><strong data-i18n>放行系统 UID</strong></p>
+								<p class="hint" data-i18n>仅白名单模式生效：勾选的系统 UID 不被隐藏。</p>
+								<div class="syscallList">
+									<label class="syscallRow"><input type="checkbox" data-allow-system-uid="0"><span>UID 0<small data-i18n>root / su / 文件管理器 helper</small></span></label>
+									<label class="syscallRow"><input type="checkbox" data-allow-system-uid="1000"><span>UID 1000<small>system / system_server</small></span></label>
+									<label class="syscallRow"><input type="checkbox" data-allow-system-uid="2000"><span>UID 2000<small>shell / ADB / scrcpy</small></span></label>
+								</div>
+							</div>
 						</div>
 					</details>
 				</section>

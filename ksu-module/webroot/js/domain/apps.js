@@ -27,11 +27,12 @@
 		return rows;
 	}
 
-	function mergePackages(rows, infos) {
+	function mergePackages(rows, infos, userPackages = null) {
 		const infoMap = new Map();
 		for (const info of Array.isArray(infos) ? infos : []) {
 			if (info && info.packageName) infoMap.set(info.packageName, info);
 		}
+		const userSet = userPackages instanceof Set ? userPackages : null;
 		return rows.map((row) => {
 			const info = infoMap.get(row.pkg);
 			// A row is unresolved when the manager explicitly says the package
@@ -43,7 +44,9 @@
 				pkg: row.pkg,
 				uid: row.uid,
 				label: info && !info.error && info.appLabel ? String(info.appLabel) : row.pkg,
-				isSystem: info && !info.error ? info.isSystem === true : false,
+				isSystem: info && !info.error
+					? info.isSystem === true
+					: (userSet ? !userSet.has(row.pkg) : false),
 				resolved,
 				icon: resolved ? `ksu://icon/${row.pkg}` : "",
 			};

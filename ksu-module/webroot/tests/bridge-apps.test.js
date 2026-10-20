@@ -143,3 +143,13 @@ test("mergePackages keeps pm UIDs usable when no info bridge is available", () =
 		{ pkg: "com.noinfo", uid: "", label: "com.noinfo", isSystem: false, resolved: false, icon: "" },
 	]);
 });
+
+test("mergePackages uses the user package list to classify system apps without getPackagesInfo", () => {
+	const rows = [
+		{ pkg: "com.user", uid: "10101" },
+		{ pkg: "com.system", uid: "1000" },
+	];
+	const merged = appsModule.mergePackages(rows, [], new Set(["com.user"]));
+	assert.equal(merged[0].isSystem, false);
+	assert.equal(merged[1].isSystem, true);
+});
