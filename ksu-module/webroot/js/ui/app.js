@@ -64,7 +64,7 @@
 
 	function cacheDom() {
 		for (const id of [
-			"statusText", "moduleVersion", "moduleVersionAbout", "refreshBtn",
+			"statusText", "moduleVersion", "aboutVersion", "refreshBtn",
 			"homeView", "targetsView", "diagnosticsView", "settingsView",
 			"applyBar", "applySummary", "applyBtn", "saveOnlyBtn", "discardBtn",
 			"toast", "confirmDialog", "confirmTitle", "confirmBody", "confirmOk", "confirmCancel",
@@ -95,7 +95,7 @@
 	function updateVersion() {
 		let version = state.moduleInfo && state.moduleInfo.version ? String(state.moduleInfo.version) : "";
 		if (dom.moduleVersion) dom.moduleVersion.textContent = version ? `v${version}` : "—";
-		if (dom.moduleVersionAbout) dom.moduleVersionAbout.textContent = version ? `v${version}` : "—";
+		if (dom.aboutVersion) dom.aboutVersion.textContent = version ? `v${version}` : "—";
 		if (version) return;
 		bridge.execShell("grep '^version=' /data/adb/modules/pathmask/module.prop 2>/dev/null | head -n1 || true")
 			.then((line) => {
@@ -103,7 +103,7 @@
 				if (!match) return;
 				version = match[1].trim();
 				if (dom.moduleVersion) dom.moduleVersion.textContent = `v${version}`;
-				if (dom.moduleVersionAbout) dom.moduleVersionAbout.textContent = `v${version}`;
+				if (dom.aboutVersion) dom.aboutVersion.textContent = `v${version}`;
 			})
 			.catch(() => {});
 	}
