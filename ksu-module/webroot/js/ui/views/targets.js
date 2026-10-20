@@ -143,6 +143,13 @@
 		if (node) node.textContent = value === undefined || value === null ? "" : String(value);
 	}
 
+	function makeNode(tag, className, text) {
+		const node = document.createElement(tag);
+		if (className) node.className = className;
+		if (text !== undefined) node.textContent = text;
+		return node;
+	}
+
 	function render(app) {
 		const draft = app.getDraft();
 		if (!draft) return;
@@ -172,15 +179,11 @@
 			const errors = validatePathDraft(item, paths, index, app.i18n.t);
 			if (errors.length) row.classList.add("is-invalid");
 
-			const main = document.createElement("div");
-			main.className = "pathMain";
-			const value = document.createElement("div");
-			value.className = "pathValue";
-			value.textContent = item.path;
+			const main = makeNode("div", "pathMain");
+			const value = makeNode("div", "pathValue", item.path);
 			main.append(value);
 
-			const badges = document.createElement("div");
-			badges.className = "pathBadges";
+			const badges = makeNode("div", "pathBadges");
 			if (item.group) badges.append(badge(item.group, "group"));
 			if (item.useParent) badges.append(badge(app.i18n.t("父级"), ""));
 			const probe = state.pathStatus ? state.pathStatus.get(index) : undefined;
@@ -217,10 +220,7 @@
 	}
 
 	function badge(text, type) {
-		const node = document.createElement("span");
-		node.className = `pathBadge${type ? ` ${type}` : ""}`;
-		node.textContent = text;
-		return node;
+		return makeNode("span", `pathBadge${type ? ` ${type}` : ""}`, text);
 	}
 
 	function iconButton(label, ariaLabel, onClick) {
@@ -346,16 +346,10 @@
 		if (state.appsLoading && !state.apps.length) {
 			if (empty) empty.hidden = true;
 			for (let i = 0; i < 6; i += 1) {
-				const row = document.createElement("div");
-				row.className = "appRow";
-				const icon = document.createElement("span");
-				icon.className = "appIcon skeleton";
-				const info = document.createElement("span");
-				info.className = "appInfo";
-				const label = document.createElement("span");
-				label.className = "appLabel skeleton";
-				label.textContent = "loading";
-				info.append(label);
+				const row = makeNode("div", "appRow");
+				const icon = makeNode("span", "appIcon skeleton");
+				const info = makeNode("span", "appInfo");
+				info.append(makeNode("span", "appLabel skeleton", "loading"));
 				row.append(icon, info);
 				container.append(row);
 			}
@@ -406,11 +400,9 @@
 				setText("#appSelectionSummary", selectionSummary(app.getDraft(), scope, app.i18n.t).label);
 			};
 
-			const icon = document.createElement("span");
-			icon.className = "appIcon";
-			icon.textContent = (item.label || item.pkg || "?").slice(0, 1).toUpperCase();
+			const icon = makeNode("span", "appIcon", (item.label || item.pkg || "?").slice(0, 1).toUpperCase());
 			if (item.icon) {
-				const img = document.createElement("img");
+				const img = makeNode("img");
 				img.src = item.icon;
 				img.alt = "";
 				img.loading = "lazy";
@@ -418,31 +410,14 @@
 				icon.append(img);
 			}
 
-			const info = document.createElement("span");
-			info.className = "appInfo";
-			const label = document.createElement("span");
-			label.className = "appLabel";
-			label.textContent = item.label || item.pkg;
-			const meta = document.createElement("span");
-			meta.className = "appMeta";
-			meta.textContent = `${item.pkg} · ${item.uid || "?"}`;
-			if (item.isSystem) {
-				const tag = document.createElement("span");
-				tag.className = "appTag";
-				tag.textContent = app.i18n.t("系统");
-				meta.append(" ", tag);
-			}
-			if (!item.resolved) {
-				const tag = document.createElement("span");
-				tag.className = "appTag unresolved";
-				tag.textContent = app.i18n.t("未解析");
-				meta.append(" ", tag);
-			}
+			const info = makeNode("span", "appInfo");
+			const label = makeNode("span", "appLabel", item.label || item.pkg);
+			const meta = makeNode("span", "appMeta", `${item.pkg} · ${item.uid || "?"}`);
+			if (item.isSystem) meta.append(" ", makeNode("span", "appTag", app.i18n.t("系统")));
+			if (!item.resolved) meta.append(" ", makeNode("span", "appTag unresolved", app.i18n.t("未解析")));
 			info.append(label, meta);
 
-			const check = document.createElement("span");
-			check.className = "appCheck";
-			check.textContent = "✓";
+			const check = makeNode("span", "appCheck", "✓");
 			row.append(checkbox, icon, info, check);
 			row.onkeydown = (event) => {
 				if (event.key !== " " && event.key !== "Enter") return;

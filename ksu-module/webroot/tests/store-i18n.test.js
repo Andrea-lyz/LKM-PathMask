@@ -76,8 +76,8 @@ test("translate handles Chinese keys, unknown keys and placeholders", () => {
 	assert.equal(translate("en", "全局"), "Global");
 	assert.equal(translate("en", "未翻译的键"), "未翻译的键");
 	assert.equal(translate("zh", "全局"), "全局");
-	assert.equal(translate("en", "已识别：{path}", { path: "/dev/x" }), "Detected: /dev/x");
-	assert.equal(translate("en", "脚本错误：{0} {1}", ["TypeError", "line 2"]), "Script error: TypeError line 2");
+	assert.equal(translate("en", "Hello {path}", { path: "/dev/x" }), "Hello /dev/x");
+	assert.equal(translate("en", "{0} 秒前", [3]), "3s ago");
 	assert.equal(translate("en", "已选 {0} 个应用", [3]), "3 app(s) selected");
 });
 

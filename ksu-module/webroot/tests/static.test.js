@@ -118,3 +118,45 @@ test("design tokens cover light/dark and keep a color-mix fallback", () => {
 	const components = fs.readFileSync(path.join(webroot, "css", "components.css"), "utf8");
 	assert.match(components, /@supports\s*\(color:\s*color-mix/);
 });
+
+test("app icon images overlay the fallback letter instead of sharing its grid", () => {
+	const components = fs.readFileSync(path.join(webroot, "css", "components.css"), "utf8");
+	assert.match(components, /\.appIcon\s*\{[^}]*position:\s*relative/s);
+	assert.match(components, /\.appIcon img\s*\{[^}]*position:\s*absolute/s);
+	assert.match(components, /\.appIcon img\s*\{[^}]*inset:\s*0/s);
+});
+
+test("UI scale tokens define a readable body size and touch target", () => {
+	const tokens = fs.readFileSync(path.join(webroot, "css", "tokens.css"), "utf8");
+	assert.match(tokens, /--pm-text-body:\s*16px/);
+	assert.match(tokens, /--pm-control:\s*44px/);
+	assert.match(tokens, /--pm-app-icon:\s*44px/);
+});
+
+test("EN_TEXT only keeps translations referenced by the current UI", () => {
+	const i18nPath = path.join(webroot, "js", "core", "i18n.js");
+	const i18n = fs.readFileSync(i18nPath, "utf8");
+	const sources = [html];
+	for (const file of fs.readdirSync(path.join(webroot, "js", "core"))) {
+		if (file === "i18n.js" || !file.endsWith(".js")) continue;
+		sources.push(fs.readFileSync(path.join(webroot, "js", "core", file), "utf8"));
+	}
+	for (const dir of ["js/domain", "js/ui"]) {
+		const walk = (current) => {
+			for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+				const full = path.join(current, entry.name);
+				if (entry.isDirectory()) walk(full);
+				else if (entry.name.endsWith(".js")) sources.push(fs.readFileSync(full, "utf8"));
+			}
+		};
+		walk(path.join(webroot, dir));
+	}
+	const source = sources.join("\n");
+	const start = i18n.indexOf("const EN_TEXT = {");
+	const end = i18n.indexOf("\n};", start);
+	assert.ok(start >= 0 && end > start, "EN_TEXT object is missing");
+	const keys = [...i18n.slice(start, end).matchAll(/^\t"((?:[^"\\]|\\.)*)"\s*:/gm)]
+		.map((match) => JSON.parse(`"${match[1]}"`));
+	const unused = keys.filter((key) => !source.includes(key));
+	assert.deepEqual(unused, []);
+});

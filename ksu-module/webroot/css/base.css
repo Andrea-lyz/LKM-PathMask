@@ -19,8 +19,8 @@ body {
 	background: var(--pm-bg);
 	color: var(--pm-text);
 	font-family: var(--pm-font);
-	font-size: 15px;
-	line-height: 1.5;
+	font-size: var(--pm-text-body);
+	line-height: 1.55;
 	-webkit-font-smoothing: antialiased;
 	overflow-x: hidden;
 }
@@ -37,18 +37,18 @@ p {
 }
 
 h1 {
-	font-size: 20px;
+	font-size: 22px;
 	line-height: 1.15;
 	letter-spacing: -0.01em;
 }
 
 h2 {
-	font-size: 16px;
+	font-size: var(--pm-text-lg);
 	line-height: 1.3;
 }
 
 h3 {
-	font-size: 14px;
+	font-size: 15px;
 	line-height: 1.3;
 }
 
@@ -57,7 +57,7 @@ strong {
 }
 
 small {
-	font-size: 12px;
+	font-size: 13px;
 }
 
 button,
@@ -118,9 +118,9 @@ svg {
 
 #main {
 	width: 100%;
-	max-width: 760px;
+	max-width: 820px;
 	margin: 0 auto;
-	padding: 16px 14px calc(var(--pm-nav-height) + var(--pm-safe-bottom) + 32px);
+	padding: 18px 16px calc(var(--pm-nav-height) + var(--pm-safe-bottom) + 34px);
 }
 
 #main.hasApplyBar {
@@ -147,14 +147,14 @@ svg {
 
 .hint {
 	color: var(--pm-muted);
-	font-size: 12px;
-	line-height: 1.55;
+	font-size: 13px;
+	line-height: 1.6;
 }
 
 .sectionSub {
 	color: var(--pm-muted);
-	font-size: 12.5px;
-	line-height: 1.45;
+	font-size: var(--pm-text-sm);
+	line-height: 1.5;
 }
 
 .sectionHead {
@@ -180,7 +180,7 @@ svg {
 
 .emptyLine {
 	color: var(--pm-faint);
-	font-size: 13px;
+	font-size: var(--pm-text-sm);
 	padding: 8px 0;
 }
 
@@ -200,10 +200,16 @@ svg {
 	border: 0;
 }
 
+@media (max-width: 420px) {
+	#main.hasApplyBar {
+		padding-bottom: calc(var(--pm-nav-height) + var(--pm-safe-bottom) + 148px);
+	}
+}
+
 @media (min-width: 760px) {
 	#main {
-		padding-left: 24px;
-		padding-right: 24px;
-		padding-top: 22px;
+		padding-left: 26px;
+		padding-right: 26px;
+		padding-top: 24px;
 	}
 }

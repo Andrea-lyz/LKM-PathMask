@@ -5,7 +5,7 @@
 /* ---------- home ---------- */
 
 #homeView {
-	gap: 12px;
+	gap: 14px;
 }
 
 #homeView .card + .card {
@@ -23,13 +23,13 @@
 /* ---------- targets ---------- */
 
 #targetsView {
-	gap: 12px;
+	gap: 14px;
 }
 
 .targetsPane {
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: 14px;
 }
 
 .targetsPane[hidden] {
@@ -38,7 +38,7 @@
 
 #targetsView > .pageSegments {
 	position: sticky;
-	top: calc(var(--pm-safe-top) + 63px);
+	top: calc(var(--pm-safe-top) + 72px);
 	z-index: 12;
 }
 
@@ -73,19 +73,19 @@
 /* ---------- diagnostics ---------- */
 
 #diagnosticsView {
-	gap: 12px;
+	gap: 14px;
 }
 
 #diagnosticsView > .pageSegments {
 	position: sticky;
-	top: calc(var(--pm-safe-top) + 63px);
+	top: calc(var(--pm-safe-top) + 72px);
 	z-index: 12;
 }
 
 .diagPane {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: 12px;
 }
 
 .diagPane[hidden] {
@@ -103,11 +103,11 @@
 /* ---------- settings ---------- */
 
 #settingsView {
-	gap: 12px;
+	gap: 14px;
 }
 
 #settingsView .card {
-	gap: 10px;
+	gap: 12px;
 }
 
 #settingsView .switchRow:first-of-type {
@@ -141,36 +141,46 @@
 
 /* ---------- narrow screens ---------- */
 
+@media (max-width: 420px) {
+	.applyBar {
+		flex-wrap: wrap;
+		gap: 8px;
+		padding: 11px 12px;
+	}
+
+	.applySummary {
+		flex: 1 1 100%;
+	}
+
+	.applyActions {
+		width: 100%;
+	}
+
+	.applyActions .button {
+		flex: 1;
+		padding: 0 8px;
+	}
+}
+
 @media (max-width: 360px) {
 	.quickGrid {
 		grid-template-columns: 1fr;
 	}
 
 	.statGrid {
-		gap: 8px;
+		gap: 9px;
 	}
 
 	.statCard {
-		padding: 11px;
+		padding: 13px;
 	}
 
 	.statValue {
-		font-size: 22px;
+		font-size: 26px;
 	}
 
 	.hero h2 {
-		font-size: 21px;
-	}
-
-	.applyBar {
-		left: 6px;
-		right: 6px;
-		padding-left: 10px;
-	}
-
-	.applyActions .button {
-		padding: 0 7px;
-		font-size: 11px;
+		font-size: 24px;
 	}
 
 	.aboutCard {
@@ -208,10 +218,10 @@
 	}
 
 	.appList {
-		max-height: 420px;
+		max-height: 500px;
 	}
 
 	.logBox {
-		max-height: 440px;
+		max-height: 480px;
 	}
 }

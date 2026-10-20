@@ -28,23 +28,16 @@
 		appFilter: "all",
 		appQuery: "",
 		busy: false,
-		capabilities: {},
 		moduleInfo: null,
 		status: null,
-		config: null,
-		texts: {},
 		apps: [],
 		appsLoaded: false,
 		appsLoading: false,
-		selected: new Set(),
 		diagnostics: null,
-		report: "",
-		history: [],
 		logs: { status: "", config: "", kernel: "", script: "" },
 		logTab: "status",
 		logPage: 0,
 		logWrap: true,
-		bootPoll: null,
 		validation: { ok: true, errors: [], warnings: [] },
 	};
 
@@ -79,7 +72,6 @@
 		cacheDom();
 		if (!dom.main || !dom.applyBar) return;
 		bridge.enableEdgeToEdge();
-		state.capabilities = bridge.detectCapabilities();
 		state.moduleInfo = bridge.getModuleInfo();
 		i18n.setLanguageDirect(i18n.detectUiLang());
 		i18n.applyStaticText(document);
@@ -137,18 +129,10 @@
 	}
 
 	function applyLoadedData(configResult, status) {
-		state.config = configResult.config;
-		state.texts = configResult.texts || {};
 		state.status = status;
 		state.validation = root.PathMask.config.validateConfig(configResult.config, i18n.t);
-		if (!store) {
-			state.store = storeApi.createStore(configResult.config);
-			store = state.store;
-			store.subscribe(onStoreChanged);
-		} else {
-			store.replaceDraft(configResult.config);
-			store.commit(configResult.config);
-		}
+		store.replaceDraft(configResult.config);
+		store.commit(configResult.config);
 		updateHeader();
 	}
 
@@ -197,10 +181,6 @@
 		return store ? store.getDraft() : null;
 	}
 
-	function getSaved() {
-		return store ? store.getSaved() : null;
-	}
-
 	function setDraft(patch) {
 		if (store) store.setDraft(patch);
 	}
@@ -213,59 +193,79 @@
 		return state;
 	}
 
-	function navigate(view) {
-		if (!["home", "targets", "diagnostics", "settings"].includes(view)) return;
-		state.view = view;
-		for (const section of $$(".view[data-view]")) {
-			section.hidden = section.dataset.view !== view;
+	const TABS = {
+		view: {
+			stateKey: "view",
+			values: ["home", "targets", "diagnostics", "settings"],
+			paneSelector: ".view[data-view]",
+			paneValue: (pane) => pane.dataset.view,
+			buttonSelector: ".navItem[data-tab]",
+			buttonValue: (button) => button.dataset.tab,
+			renderView: (value) => value,
+		},
+		targetsTab: {
+			stateKey: "targetsTab",
+			values: ["paths", "scope", "apps"],
+			paneSelector: "#targetsView .targetsPane",
+			paneValue: (pane) => pane.id.replace(/Section$/, ""),
+			buttonSelector: "#targetsSegments [data-targets-tab]",
+			buttonValue: (button) => button.dataset.targetsTab,
+			renderView: () => "targets",
+		},
+		diagTab: {
+			stateKey: "diagTab",
+			values: ["verdict", "logs", "report"],
+			paneSelector: "#diagnosticsView .diagPane",
+			paneValue: (pane) => pane.id.replace(/Section$/, ""),
+			buttonSelector: "#diagSegments [data-diag-tab]",
+			buttonValue: (button) => button.dataset.diagTab,
+			renderView: () => "diagnostics",
+		},
+		logTab: {
+			stateKey: "logTab",
+			values: ["status", "config", "kernel", "script"],
+			paneSelector: "",
+			buttonSelector: "#logTabs [data-log]",
+			buttonValue: (button) => button.dataset.log,
+			renderView: () => "diagnostics",
+		},
+	};
+
+	function selectTab(kind, value) {
+		const tab = TABS[kind];
+		if (!tab || !tab.values.includes(value)) return false;
+		state[tab.stateKey] = value;
+		if (tab.paneSelector) {
+			for (const pane of $$(tab.paneSelector)) {
+				pane.hidden = tab.paneValue(pane) !== value;
+			}
 		}
-		for (const button of $$(".navItem[data-tab]")) {
-			const active = button.dataset.tab === view;
+		for (const button of $$(tab.buttonSelector)) {
+			const active = tab.buttonValue(button) === value;
 			button.classList.toggle("active", active);
 			button.setAttribute("aria-selected", String(active));
 		}
-		renderView(view);
+		renderView(tab.renderView(value));
+		return true;
+	}
+
+	function navigate(view) {
+		if (!selectTab("view", view)) return;
 		window.scrollTo({ top: 0, behavior: "smooth" });
 	}
 
 	function setTargetsTab(tab) {
-		if (!["paths", "scope", "apps"].includes(tab)) return;
-		state.targetsTab = tab;
-		for (const pane of $$("#targetsView .targetsPane")) {
-			pane.hidden = pane.id !== `${tab}Section`;
-		}
-		for (const button of $$("#targetsSegments [data-targets-tab]")) {
-			const active = button.dataset.targetsTab === tab;
-			button.classList.toggle("active", active);
-			button.setAttribute("aria-selected", String(active));
-		}
-		renderView("targets");
+		selectTab("targetsTab", tab);
 	}
 
 	function setDiagTab(tab) {
-		if (!["verdict", "logs", "report"].includes(tab)) return;
-		state.diagTab = tab;
-		for (const pane of $$("#diagnosticsView .diagPane")) {
-			pane.hidden = pane.id !== `${tab}Section`;
-		}
-		for (const button of $$("#diagSegments [data-diag-tab]")) {
-			const active = button.dataset.diagTab === tab;
-			button.classList.toggle("active", active);
-			button.setAttribute("aria-selected", String(active));
-		}
-		renderView("diagnostics");
+		selectTab("diagTab", tab);
 	}
 
 	function setLogTab(tab) {
-		if (!["status", "config", "kernel", "script"].includes(tab)) return;
-		state.logTab = tab;
+		if (!TABS.logTab.values.includes(tab)) return;
 		state.logPage = 0;
-		for (const button of $$("#logTabs [data-log]")) {
-			const active = button.dataset.log === tab;
-			button.classList.toggle("active", active);
-			button.setAttribute("aria-selected", String(active));
-		}
-		renderView("diagnostics");
+		selectTab("logTab", tab);
 	}
 
 	function renderAll() {
@@ -396,7 +396,6 @@
 				status = await root.PathMask.module.probeStatus();
 			}
 			store.commit(draft);
-			state.config = store.getSaved();
 			state.status = status;
 			updateHeader();
 			renderAll();
@@ -496,10 +495,6 @@
 		state.logs = { ...state.logs, ...next };
 	}
 
-	function getDiagnostics() {
-		return state.diagnostics;
-	}
-
 	function setDiagnostics(value) {
 		state.diagnostics = value;
 	}
@@ -511,11 +506,8 @@
 		confirm,
 		discardChanges,
 		getDraft,
-		getDiagnostics,
 		getLogsFor,
-		getSaved,
 		getState,
-		getStateView: () => state.view,
 		init,
 		navigate,
 		openSheet,

@@ -41,7 +41,14 @@
 	--pm-space-4: 16px;
 	--pm-space-5: 24px;
 	--pm-space-6: 32px;
-	--pm-nav-height: 64px;
+	--pm-text-body: 16px;
+	--pm-text-lg: 18px;
+	--pm-text-sm: 13.5px;
+	--pm-text-xs: 12.5px;
+	--pm-control: 44px;
+	--pm-control-sm: 38px;
+	--pm-app-icon: 44px;
+	--pm-nav-height: 70px;
 	--pm-safe-bottom: env(safe-area-inset-bottom, 0px);
 	--pm-safe-top: env(safe-area-inset-top, 0px);
 	--pm-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
