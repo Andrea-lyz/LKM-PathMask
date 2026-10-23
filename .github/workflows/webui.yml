@@ -1,0 +1,57 @@
+name: WebUI checks
+
+# Verifies ksu-module/webroot. Called as a reusable workflow by
+# build-lkm.yml so a WebUI regression blocks the release zips too; the
+# push / pull_request / dispatch triggers are what make it run on its own
+# for UI-only branches, which never touch the kernel build.
+on:
+  workflow_call:
+  push:
+    branches:
+      - main
+      - 'dev/**'
+    paths:
+      - 'ksu-module/webroot/**'
+      - 'tools/tests/webui/**'
+      - '.github/workflows/webui.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'ksu-module/webroot/**'
+      - 'tools/tests/webui/**'
+      - '.github/workflows/webui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify KernelSU WebUI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/tests/webui/package-lock.json
+
+      # Cheap and first: a parse error makes every later step noise.
+      - name: Check app.js parses
+        run: node --check ksu-module/webroot/app.js
+
+      - name: Install test dependencies
+        working-directory: tools/tests/webui
+        run: npm ci
+
+      - name: Translation coverage
+        working-directory: tools/tests/webui
+        run: node i18n.test.mjs
+
+      - name: Headless smoke test
+        working-directory: tools/tests/webui
+        run: node smoke.test.mjs

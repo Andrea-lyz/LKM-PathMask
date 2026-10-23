@@ -25,6 +25,10 @@ jobs:
         shell: pwsh
         run: ./tools/tests/test-packaging.ps1
 
+  test-webui:
+    name: Validate KernelSU WebUI
+    uses: ./.github/workflows/webui.yml
+
   build-lkm:
     strategy:
       matrix:
@@ -44,7 +48,7 @@ jobs:
 
   publish-release:
     name: Publish module zips to GitHub Release
-    needs: [test-tools, build-lkm]
+    needs: [test-tools, test-webui, build-lkm]
     # Only main / v* tags publish a Release. Dev branches (dev/**) and
     # pull requests still get build artifacts via actions/upload-artifact
     # but never push a Release that would notify end users.
