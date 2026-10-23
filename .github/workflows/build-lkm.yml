@@ -29,6 +29,52 @@ jobs:
     name: Validate KernelSU WebUI
     uses: ./.github/workflows/webui.yml
 
+  # Complement of publish-release's condition: dev/** branches and pull
+  # requests get build artifacts but deliberately never push a Release that
+  # would notify end users. That left them with raw .ko files and no
+  # installable module, so a UI or script change on a dev branch could not be
+  # flashed to a device for testing. Package the same zips publish-release
+  # would, and upload them as workflow artifacts only.
+  package-dev-zips:
+    name: Package installable zips (artifact only)
+    needs: [test-tools, test-webui, build-lkm]
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: release-assets
+
+      - name: Package module zips
+        run: |
+          mkdir -p dev-zips
+          found_ko=0
+          for ko in $(find release-assets -type f -name '*_pathmask.ko' | sort); do
+            found_ko=1
+            base="$(basename "$ko" _pathmask.ko)"
+            # NO_UPDATE_JSON keeps the zip off any update channel: these are
+            # throwaway test builds, and an updateJson pointing at main would
+            # let Manager cross-install over a real release.
+            NO_UPDATE_JSON=1 sh ./tools/package_ksu.sh "$ko" "dev-zips/${base}_pathmask-ksu.zip"
+          done
+          if [ "$found_ko" -eq 0 ]; then
+            echo "No PathMask .ko artifacts found." >&2
+            exit 1
+          fi
+          ls -la dev-zips
+
+      - name: Upload module zips
+        uses: actions/upload-artifact@v7
+        with:
+          name: pathmask-dev-zips
+          path: dev-zips/*_pathmask-ksu.zip
+
   build-lkm:
     strategy:
       matrix:
