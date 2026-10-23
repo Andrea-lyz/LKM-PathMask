@@ -15,6 +15,23 @@ body {
 	max-width: 100%;
 }
 
+/*
+ * `overflow-x: hidden` on html/body turns them into scroll containers,
+ * which silently disables `position: sticky` for their descendants:
+ * .topbar and .tabs scrolled away with the content instead of pinning
+ * (measured at scrollY=900: topbar.top=-900, tabs.top=-769.7).
+ * `clip` blocks the same horizontal overflow without creating a scroll
+ * container, so sticky keeps working. Where `clip` is unsupported the
+ * declaration is dropped and we fall back to the `hidden` above, i.e.
+ * we degrade to today's behaviour rather than to unclipped overflow.
+ */
+@supports (overflow-x: clip) {
+	html,
+	body {
+		overflow-x: clip;
+	}
+}
+
 body {
 	margin: 0;
 	min-height: 100vh;
@@ -22,10 +39,24 @@ body {
 	background: Canvas;
 }
 
-.topbar {
+/*
+ * One sticky wrapper for the topbar and the tab strip. Pinning the two
+ * separately forced .tabs to hardcode `top: 67px` to sit under the
+ * topbar, but the topbar's height is content-driven -- #statusText
+ * wraps arbitrarily long error messages -- so the tabs slid underneath
+ * it (the topbar paints above, z-index 20 vs 18). Measured with the
+ * default status text at 390px wide the topbar is already 76.3px tall,
+ * i.e. 9.3px of the tab strip was buried, growing to 45.3px once a long
+ * error wrapped. Pinning the pair as a unit removes the magic number.
+ */
+.stickyHead {
 	position: sticky;
 	top: 0;
 	z-index: 20;
+	background: Canvas;
+}
+
+.topbar {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -73,6 +104,20 @@ h2 {
 	overflow-wrap: anywhere;
 }
 
+/*
+ * Applied by the two error traps (the inline handler in index.html and
+ * the top of app.js) instead of an inline `style.color = "#c01c28"`,
+ * which could not follow the theme and was never cleared again.
+ * Mixing the red with CanvasText keeps it legible in both schemes --
+ * measured with color-scheme forced each way, it resolves to #7d121a on
+ * a #ffffff Canvas (10.64:1) and #d66b73 on a #121212 Canvas (5.54:1),
+ * both clearing the 4.5:1 AA threshold for 13px text.
+ */
+#statusText.statusError {
+	color: color-mix(in srgb, #c01c28 65%, CanvasText);
+	font-weight: 600;
+}
+
 .topActions {
 	display: flex;
 	align-items: center;
@@ -106,9 +151,6 @@ h2 {
 }
 
 .tabs {
-	position: sticky;
-	top: 67px;
-	z-index: 18;
 	display: flex;
 	flex-wrap: wrap;
 	align-items: stretch;
@@ -565,7 +607,11 @@ button:active {
 	border-top: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
 }
 
-.actions .primary {
+/*
+ * Deliberately not scoped to `.actions`: the confirm dialog's 确定 button
+ * is also the primary action in its context and needs the same emphasis.
+ */
+.primary {
 	background: Highlight;
 	color: HighlightText;
 	border-color: Highlight;
@@ -643,6 +689,20 @@ button:active {
  * shown.
  */
 .modal[hidden] {
+	display: none;
+}
+
+/*
+ * Same trap, two more instances: .verdictBox declares display:flex and
+ * .switchRow .hint declares display:block, so both beat the UA [hidden]
+ * rule and the JS `.hidden = true` toggles in renderVerdictPanel() and
+ * updateAutoSceneDebugfsStatus() had no effect. Result: an empty verdict
+ * box rendered above #healthList before any diagnostic had run, and a
+ * stray block stayed under the "自动识别 Scene debugfs" label while the
+ * feature was off -- which is the default.
+ */
+.verdictBox[hidden],
+.switchRow .hint[hidden] {
 	display: none;
 }
 
@@ -894,7 +954,17 @@ button:active {
 .historyItem:hover,
 .historyItem:focus {
 	background: color-mix(in srgb, CanvasText 6%, transparent);
-	outline: none;
+}
+
+/*
+ * These <li> are tabIndex=0 (openHistoryModal), so they are keyboard
+ * reachable. The `outline: none` that used to sit in the rule above
+ * deleted the only focus indicator and left a 6% background tint, which
+ * is far too weak a cue to meet WCAG 2.4.11.
+ */
+.historyItem:focus-visible {
+	outline: 2px solid Highlight;
+	outline-offset: 2px;
 }
 
 .historyItem.active {

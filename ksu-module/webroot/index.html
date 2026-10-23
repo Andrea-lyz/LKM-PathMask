@@ -7,36 +7,44 @@
 	<link rel="stylesheet" href="./style.css">
 </head>
 <body>
-	<header class="topbar">
-		<div>
-			<h1><span>PathMask</span><small>v2.8.3</small></h1>
-			<p id="statusText" data-i18n>正在读取状态...</p>
-		</div>
-		<div class="topActions">
-			<button id="donateBtn" class="topTextButton" type="button" data-i18n>捐赠</button>
-			<button id="refreshBtn" class="topTextButton" type="button" data-i18n>刷新</button>
-			<a class="iconButton" href="https://github.com/Andrea-lyz/LKM-PathMask" target="_blank" rel="noopener" aria-label="打开 GitHub 项目" data-i18n-aria-label title="打开 GitHub 项目" data-i18n-title>
-				<svg viewBox="0 0 24 24" aria-hidden="true">
-					<path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.02c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.08 1.84 2.82 1.31 3.51 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23A11.47 11.47 0 0 1 12 5.8c1.02 0 2.04.14 3 .41 2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 .5Z"/>
-				</svg>
-			</a>
-		</div>
-	</header>
+	<div class="stickyHead">
+		<header class="topbar">
+			<div>
+				<h1><span>PathMask</span><small>v2.8.3</small></h1>
+				<p id="statusText" data-i18n role="status" aria-live="polite">正在读取状态...</p>
+			</div>
+			<div class="topActions">
+				<button id="donateBtn" class="topTextButton" type="button" data-i18n>捐赠</button>
+				<button id="refreshBtn" class="topTextButton" type="button" data-i18n>刷新</button>
+				<a class="iconButton" href="https://github.com/Andrea-lyz/LKM-PathMask" target="_blank" rel="noopener" aria-label="打开 GitHub 项目" data-i18n-aria-label title="打开 GitHub 项目" data-i18n-title>
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.02c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.08 1.84 2.82 1.31 3.51 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23A11.47 11.47 0 0 1 12 5.8c1.02 0 2.04.14 3 .41 2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 .5Z"/>
+					</svg>
+				</a>
+			</div>
+		</header>
 
-	<nav class="tabs" aria-label="页面" data-i18n-aria-label>
-		<button class="tab active" type="button" data-tab="config" data-i18n>遮罩</button>
-		<button class="tab" type="button" data-tab="procguard" data-i18n>防护</button>
-		<button class="tab" type="button" data-tab="diagnosis" data-i18n>诊断</button>
-		<button class="tab" type="button" data-tab="logs" data-i18n>日志</button>
-		<button class="tab" type="button" data-tab="report" data-i18n>报告</button>
-		<div class="langSwitch" role="group" aria-label="界面语言" data-i18n-aria-label>
-			<button class="langOption active" type="button" data-lang="zh" lang="zh-CN" aria-label="中文界面" data-i18n-aria-label>中</button>
-			<button class="langOption" type="button" data-lang="en" lang="en" aria-label="英文界面" data-i18n-aria-label>EN</button>
-		</div>
-	</nav>
+		<!--
+			role=tablist replaces the nav landmark on this element. The
+			language switch stays inside as a role=group sibling of the
+			tabs rather than being moved, so the visual layout is
+			unchanged; it is not a tab and is not counted as one.
+		-->
+		<nav class="tabs" role="tablist" aria-label="页面" data-i18n-aria-label>
+			<button class="tab active" type="button" role="tab" id="tab-config" aria-controls="configPanel" aria-selected="true" data-tab="config" data-i18n>遮罩</button>
+			<button class="tab" type="button" role="tab" id="tab-procguard" aria-controls="procguardPanel" aria-selected="false" tabindex="-1" data-tab="procguard" data-i18n>防护</button>
+			<button class="tab" type="button" role="tab" id="tab-diagnosis" aria-controls="diagnosisPanel" aria-selected="false" tabindex="-1" data-tab="diagnosis" data-i18n>诊断</button>
+			<button class="tab" type="button" role="tab" id="tab-logs" aria-controls="logsPanel" aria-selected="false" tabindex="-1" data-tab="logs" data-i18n>日志</button>
+			<button class="tab" type="button" role="tab" id="tab-report" aria-controls="reportPanel" aria-selected="false" tabindex="-1" data-tab="report" data-i18n>报告</button>
+			<div class="langSwitch" role="group" aria-label="界面语言" data-i18n-aria-label>
+				<button class="langOption active" type="button" data-lang="zh" lang="zh-CN" aria-label="中文界面" data-i18n-aria-label>中</button>
+				<button class="langOption" type="button" data-lang="en" lang="en" aria-label="英文界面" data-i18n-aria-label>EN</button>
+			</div>
+		</nav>
+	</div>
 
 	<main>
-		<section id="configPanel" class="tabPanel active">
+		<section id="configPanel" class="tabPanel active" role="tabpanel" aria-labelledby="tab-config" tabindex="0">
 			<section class="summaryGrid" aria-label="状态总览" data-i18n-aria-label>
 				<div class="metric">
 					<span data-i18n>模块状态</span>
@@ -182,7 +190,7 @@
 			</section>
 		</section>
 
-		<section id="procguardPanel" class="tabPanel">
+		<section id="procguardPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-procguard" tabindex="0">
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>隔离防护</h2>
@@ -241,7 +249,7 @@
 			</section>
 		</section>
 
-		<section id="diagnosisPanel" class="tabPanel">
+		<section id="diagnosisPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-diagnosis" tabindex="0">
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>结论</h2>
@@ -266,17 +274,17 @@
 			</section>
 		</section>
 
-		<section id="logsPanel" class="tabPanel">
+		<section id="logsPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-logs" tabindex="0">
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>日志分页</h2>
 					<button id="refreshLogsBtn" type="button" data-i18n>刷新日志</button>
 				</div>
-				<div class="logTabs">
-					<button class="logTab active" type="button" data-log="status" data-i18n>状态</button>
-					<button class="logTab" type="button" data-log="config" data-i18n>配置</button>
-					<button class="logTab" type="button" data-log="kernel" data-i18n>内核</button>
-					<button class="logTab" type="button" data-log="script" data-i18n>脚本</button>
+				<div class="logTabs" role="group" aria-label="日志类型" data-i18n-aria-label aria-controls="logOutput">
+					<button class="logTab active" type="button" aria-pressed="true" data-log="status" data-i18n>状态</button>
+					<button class="logTab" type="button" aria-pressed="false" data-log="config" data-i18n>配置</button>
+					<button class="logTab" type="button" aria-pressed="false" data-log="kernel" data-i18n>内核</button>
+					<button class="logTab" type="button" aria-pressed="false" data-log="script" data-i18n>脚本</button>
 				</div>
 				<textarea id="logOutput" class="monoBox" rows="16" readonly></textarea>
 				<div class="pager">
@@ -287,7 +295,7 @@
 			</section>
 		</section>
 
-		<section id="reportPanel" class="tabPanel">
+		<section id="reportPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-report" tabindex="0">
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>诊断报告</h2>
@@ -304,7 +312,7 @@
 		<button id="reloadBtn" class="primary" type="button" data-i18n>保存并热重载</button>
 	</footer>
 
-	<div id="toast" class="toast" hidden></div>
+	<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 	<div id="donateModal" class="modal" hidden>
 		<div class="modalBackdrop" data-modal-close="donateModal"></div>
@@ -319,7 +327,7 @@
 			</div>
 			<div class="modalBody donateBody">
 				<p data-i18n>如果 PathMask 对你有帮助，欢迎自愿捐赠支持后续维护。</p>
-				<img class="donateQr" src="./PY_QR.png" alt="微信与支付宝收款二维码" data-i18n-alt decoding="async">
+				<img class="donateQr" src="./PY_QR.png" alt="微信与支付宝收款二维码" data-i18n-alt width="1200" height="811" loading="lazy" decoding="async">
 				<p class="hint" data-i18n>请使用微信或支付宝扫码。感谢支持！</p>
 			</div>
 		</div>
@@ -380,6 +388,27 @@
 		</div>
 	</div>
 
+	<div id="confirmModal" class="modal" hidden>
+		<div class="modalBackdrop" data-modal-close="confirmModal"></div>
+		<div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmBody">
+			<div class="modalHeader">
+				<h2 id="confirmTitle" data-i18n>请确认</h2>
+				<button class="iconButton" type="button" data-modal-close="confirmModal" aria-label="关闭" data-i18n-aria-label>
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M5.7 4.29 4.29 5.71 10.59 12l-6.3 6.29 1.42 1.42L12 13.41l6.29 6.3 1.42-1.42L13.41 12l6.3-6.29-1.42-1.42L12 10.59z"/>
+					</svg>
+				</button>
+			</div>
+			<div class="modalBody">
+				<p id="confirmBody"></p>
+				<div class="buttonGrid">
+					<button id="confirmCancelBtn" type="button" data-i18n>取消</button>
+					<button id="confirmOkBtn" class="primary" type="button" data-i18n>确定</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
 	<script charset="utf-8">
 		// Last-resort syntax error trap: any parse failure in app.js
 		// (or runtime error before app.js wires its own handlers) lands
@@ -393,7 +422,7 @@
 				? " @ " + e.filename.replace(/^.*\//, "") + ":" + e.lineno
 				: "";
 			s.textContent = "脚本错误：" + msg + loc;
-			s.style.color = "#c01c28";
+			s.classList.add("statusError");
 		}, true);
 	</script>
 	<script src="./app.js" charset="utf-8"></script>

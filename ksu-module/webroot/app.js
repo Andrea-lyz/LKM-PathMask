@@ -13,7 +13,7 @@ window.addEventListener("error", (event) => {
 	const status = document.getElementById("statusText");
 	if (status) {
 		status.textContent = t(`脚本错误：{0} {1}`, [msg, where]);
-		status.style.color = "#c01c28";
+		status.classList.add("statusError");
 	}
 });
 window.addEventListener("unhandledrejection", (event) => {
@@ -23,7 +23,7 @@ window.addEventListener("unhandledrejection", (event) => {
 	const status = document.getElementById("statusText");
 	if (status) {
 		status.textContent = t(`Promise 错误：{0}`, [msg]);
-		status.style.color = "#c01c28";
+		status.classList.add("statusError");
 	}
 });
 
@@ -198,6 +198,10 @@ const EN_TEXT = {
 		"Hide the parent directory of the match instead of the entry itself (dir:). Required for random parent directories.",
 	"/system/app/example 或 /dev/???/marker":
 		"/system/app/example or /dev/???/marker",
+	"OR 组名（可选）": "OR group name (optional)",
+	"隐藏父目录（dir:）": "Hide the parent directory (dir:)",
+	"删除路径 {0}": "Delete path {0}",
+	"（空）": "(empty)",
 
 	// Mask tab.
 	"英文界面": "English interface",
@@ -287,7 +291,6 @@ const EN_TEXT = {
 	"KernelSU WebUI API 不可用": "The KernelSU WebUI API is not available",
 	"命令失败：{errno}": "Command failed: {errno}",
 	"读取失败": "Failed to read the configuration",
-	"脚本初始化失败": "Script initialisation failed",
 
 	// Error traps (they can fire before EN_TEXT exists, so t() stays safe
 	// and falls back to the Chinese source in that window).
@@ -595,6 +598,8 @@ const EN_TEXT = {
 	// Copy toasts, app loading, procguard panel and boot state.
 	"没有可复制内容": "Nothing to copy",
 	"已复制": "Copied",
+	"复制失败，请长按文本框手动复制":
+		"Copy failed; long-press the text box to copy it manually",
 	"已加载 {0} 个应用": "Loaded {0} apps",
 	"当前模块包未包含 procguard.ko，防护不可用":
 		"This module package does not include procguard.ko, so the guard is unavailable",
@@ -683,6 +688,9 @@ const EN_TEXT = {
 
 	// Save / reload / pause flows.
 	"已保存，重启后生效": "Saved; takes effect after a reboot",
+	"恢复默认配置会覆盖所有 *.conf（清空白名单包名和直接 UID），并丢弃页面上未保存的修改。确定继续？":
+		"Restoring defaults overwrites every *.conf (clearing the allow-list packages and the direct UIDs) and discards any edits on this page that were never saved. Continue?",
+	"已取消，配置未改动": "Cancelled; the configuration is unchanged",
 	"跟随原厂": "OEM default",
 	"伪装不存在": "Pretend it does not exist",
 	"旧版行为": "Legacy behaviour",
@@ -750,6 +758,7 @@ const EN_TEXT = {
 	"历史诊断": "Diagnostic history",
 	"恢复默认配置": "Restore defaults",
 	"日志分页": "Log pages",
+	"日志类型": "Log type",
 	"刷新日志": "Refresh logs",
 	"状态": "Status",
 	"配置": "Config",
@@ -765,6 +774,9 @@ const EN_TEXT = {
 	// Modals.
 	"支持 PathMask": "Support PathMask",
 	"关闭": "Close",
+	"请确认": "Please confirm",
+	"取消": "Cancel",
+	"确定": "OK",
 	"如果 PathMask 对你有帮助，欢迎自愿捐赠支持后续维护。":
 		"If PathMask is useful to you, a voluntary donation supports its continued maintenance.",
 	"微信与支付宝收款二维码": "WeChat and Alipay donation QR code",
@@ -822,7 +834,18 @@ function detectUiLang() {
 
 function t(source, params) {
 	if (source === undefined || source === null) return source;
-	let text = uiLang === "en" ? (EN_TEXT[source] ?? source) : source;
+	let text = source;
+	try {
+		text = uiLang === "en" ? (EN_TEXT[source] ?? source) : source;
+	} catch (error) {
+		// uiLang and EN_TEXT are bindings declared further down this
+		// file. The window error traps at the very top call t(), and a
+		// throw during top-level evaluation before those bindings are
+		// initialised leaves them in the temporal dead zone -- which
+		// would make the handler that exists to report the failure
+		// throw itself. The untranslated source is the right fallback:
+		// it is exactly what the zh build renders anyway.
+	}
 	if (params) {
 		text = Array.isArray(params)
 			? text.replace(/\{(\d+)\}/g, (match, index) => (
@@ -1034,10 +1057,49 @@ function showToast(message) {
 	}, 4200);
 }
 
+/*
+ * Run a list of async factories with a concurrency cap. execShell()
+ * gives every call its own callback name, so concurrent bridge calls
+ * are safe by construction -- scheduleBootPolling() and
+ * gatherDiagnosticFacts() already rely on that. The cap exists because
+ * each call spawns a root shell on the device, and firing all ~32 of
+ * refreshConfig()'s reads at once would spike it; 8 at a time still
+ * removes almost all of the serial round-trip cost.
+ */
+async function mapLimit(factories, limit) {
+	const results = new Array(factories.length);
+	let next = 0;
+	const workers = Array.from(
+		{ length: Math.max(1, Math.min(limit, factories.length)) },
+		async () => {
+			while (next < factories.length) {
+				const index = next++;
+				results[index] = await factories[index]();
+			}
+		},
+	);
+	await Promise.all(workers);
+	return results;
+}
+
+const REFRESH_CONCURRENCY = 8;
+
 function setBusy(nextBusy, message) {
 	busy = nextBusy;
 	for (const button of actionButtons) button.disabled = nextBusy;
-	if (message) statusText.textContent = message;
+	if (message) {
+		statusText.textContent = message;
+		// A new action supersedes whatever error was on display.
+		statusText.classList.remove("statusError");
+	}
+}
+
+// The status line is the WebUI's main feedback channel, so a failure has
+// to be visible there and not only in the transient toast.
+function setStatusError(message, error) {
+	statusText.textContent = message;
+	statusText.classList.add("statusError");
+	showToast(error && error.message ? error.message : String(error));
 }
 
 async function runAction(message, action) {
@@ -1340,6 +1402,9 @@ function addPathRow(value = "") {
 	remove.type = "button";
 	remove.addEventListener("click", () => row.remove());
 
+	// Keep the delete button's accessible name in step with the path.
+	input.addEventListener("input", () => applyPathRowText(row));
+
 	row.append(input, groupInput, dirToggle, remove);
 	applyPathRowText(row);
 	pathList.append(row);
@@ -1356,17 +1421,35 @@ function applyPathRowText(row) {
 	const inputs = row.querySelectorAll('input[type="text"]');
 	const pathInput = inputs[0];
 	const groupInput = inputs[1];
+	const dirCheckbox = row.querySelector('input[type="checkbox"]');
 	const dirToggle = row.querySelector(".pathRowDirToggle");
 	const remove = row.querySelector("button");
-	if (pathInput) pathInput.placeholder = t("/system/app/example 或 /dev/???/marker");
+	if (pathInput) {
+		pathInput.placeholder = t("/system/app/example 或 /dev/???/marker");
+		/*
+		 * The column header row is aria-hidden, and a placeholder stops
+		 * being announced once the field holds a value, so every control
+		 * here needs a name of its own rather than relying on position.
+		 */
+		pathInput.setAttribute("aria-label", t("隐藏路径"));
+	}
 	if (groupInput) {
 		groupInput.placeholder = t("组");
 		groupInput.title = t("可选 OR 组名。同名组内任一行命中即视为该组满足，所有未分组的行仍需各自存在");
+		groupInput.setAttribute("aria-label", t("OR 组名（可选）"));
 	}
+	if (dirCheckbox) dirCheckbox.setAttribute("aria-label", t("隐藏父目录（dir:）"));
 	if (dirToggle) {
 		dirToggle.title = t("勾选后隐藏匹配项的父目录（dir:）。对随机父目录场景必须勾选");
 	}
-	if (remove) remove.textContent = t("删");
+	if (remove) {
+		remove.textContent = t("删");
+		// Name the row being deleted: a list of N paths otherwise exposes
+		// N identical "删" buttons that read out the same.
+		remove.setAttribute("aria-label", t("删除路径 {0}", [
+			(pathInput?.value || "").trim() || t("（空）"),
+		]));
+	}
 }
 
 function collectPaths() {
@@ -1393,7 +1476,6 @@ function parsePackageLine(line) {
 
 function renderApps() {
 	const query = $("#searchInput").value.trim().toLowerCase();
-	appList.textContent = "";
 
 	const filtered = apps
 		.filter((app) => !query || app.pkg.toLowerCase().includes(query))
@@ -1403,6 +1485,11 @@ function renderApps() {
 			if (selectedA !== selectedB) return selectedA ? -1 : 1;
 			return a.pkg.localeCompare(b.pkg);
 		});
+
+	// Build off-DOM: appending every row to the live list re-runs layout
+	// each time, and with system apps shown the list runs to several
+	// hundred rows.
+	const fragment = document.createDocumentFragment();
 	for (const app of filtered) {
 		const row = document.createElement("label");
 		row.className = selectedPackages.has(app.pkg) ? "appRow selected" : "appRow";
@@ -1413,7 +1500,17 @@ function renderApps() {
 		checkbox.addEventListener("change", () => {
 			if (checkbox.checked) selectedPackages.add(app.pkg);
 			else selectedPackages.delete(app.pkg);
-			renderApps();
+			/*
+			 * Update just this row rather than re-rendering the list.
+			 * renderApps() sorts selected packages first, so a full
+			 * rebuild teleported the row the user had just tapped to the
+			 * top -- measured: index 42 -> 0 -- which makes bulk
+			 * selection unusable because the next target moves away from
+			 * the finger. The selected-first ordering still applies the
+			 * next time the list is genuinely rebuilt (search, scope
+			 * switch, refresh).
+			 */
+			row.classList.toggle("selected", checkbox.checked);
 			updateHealthList();
 		});
 
@@ -1426,8 +1523,11 @@ function renderApps() {
 		uid.textContent = app.uid;
 
 		row.append(checkbox, pkg, uid);
-		appList.append(row);
+		fragment.append(row);
 	}
+
+	appList.textContent = "";
+	appList.append(fragment);
 }
 
 function renderHealth(items) {
@@ -2846,13 +2946,29 @@ async function copyText(text) {
 		}
 	}
 
+	/*
+	 * Fallback for WebViews without an async clipboard (navigator.clipboard
+	 * needs a secure context). The off-screen positioning keeps the page
+	 * from scrolling to the temporary textarea, and we report what
+	 * execCommand actually returned instead of always claiming success.
+	 */
 	const area = document.createElement("textarea");
 	area.value = text;
+	area.setAttribute("readonly", "");
+	area.style.position = "fixed";
+	area.style.top = "-1000px";
+	area.style.opacity = "0";
 	document.body.append(area);
 	area.select();
-	document.execCommand("copy");
+	area.setSelectionRange(0, area.value.length);
+	let copied = false;
+	try {
+		copied = document.execCommand("copy");
+	} catch (error) {
+		copied = false;
+	}
 	area.remove();
-	showToast(t("已复制"));
+	showToast(copied ? t("已复制") : t("复制失败，请长按文本框手动复制"));
 }
 
 async function loadApps() {
@@ -2913,38 +3029,81 @@ async function setProcguardEnabled(enable) {
 }
 
 async function refreshConfig() {
-	const targetText = await readFile(files.targets);
-	const hideText = await readFile(files.hideDirents);
-	const scopeText = await readFile(files.scope);
-	const denyPkgText = await readFile(files.denyPackages);
-	const allowPkgText = await readFile(files.allowPackages);
-	const denyUidText = await readFile(files.denyUids);
-	const allowUidText = await readFile(files.allowUids);
-	const allowSystemUidText = await readFileOrDefault(files.allowSystemUids, DEFAULT_ALLOW_SYSTEM_UIDS);
-	const waitText = await readFile(files.waitSeconds);
-	const enableSyscallHooksText = await readFile(files.enableSyscallHooks);
-	const syscallHooksText = await readFile(files.syscallHooks);
-	const autoSceneDebugfsText = await readFile(files.autoSceneDebugfs);
-	const sceneDebugfsPathsText = await readFile(files.sceneDebugfsPaths);
-	const sceneDebugfsStateText = await readFile(files.sceneDebugfsState);
-	const bootStateText = await readFile(files.bootState);
-	const moduleText = await safeExec(`grep '^${MODULE_NAME} ' /proc/modules || true`);
-	const legacyModuleText = await safeExec(`grep '^${LEGACY_MODULE_NAME} ' /proc/modules || true`);
-	const sysDenyUids = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/deny_uids ] && cat /sys/module/${MODULE_NAME}/parameters/deny_uids || true`);
-	const sysResolvedCount = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/resolved_count ] && cat /sys/module/${MODULE_NAME}/parameters/resolved_count || true`);
-	const procguardConfText = await readFile(files.procguardConf);
-	const writePolicyText = await readFile(files.writeOpPolicy);
-	const procguardModuleText = await safeExec(`grep '^${PROCGUARD_MODULE_NAME} ' /proc/modules || true`);
-	const procguardKoInfo = await safeExec(`[ -f ${shellQuote(files.procguardKo)} ] && echo present || echo missing`);
-	const procguardHits = await safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/blocked_hits ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/blocked_hits || true`);
-	const procguardMissed = await safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/missed ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/missed || true`);
-	const procguardGid = await safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/target_gid ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/target_gid || true`);
-	const koInfo = await safeExec(`[ -f ${shellQuote(files.ko)} ] && ls -l ${shellQuote(files.ko)} || echo missing`);
-	const moduleFlags = await safeExec(`ls -1 ${shellQuote(MODDIR)}/disable ${shellQuote(MODDIR)}/remove 2>/dev/null || true`);
-	const legacyConfigInfo = await safeExec(`[ -d ${shellQuote(LEGACY_CONFIGDIR)} ] && echo ${shellQuote(LEGACY_CONFIGDIR)} || true`);
-	const loadFailCountText = await readFile(files.failCount);
-	const loadFailReasonText = await readFile(files.failReason);
-	const nowText = await safeExec(`date +%s 2>/dev/null || echo 0`);
+	/*
+	 * Every one of these is an independent read, so they are dispatched
+	 * concurrently (capped by REFRESH_CONCURRENCY). They used to be
+	 * awaited one after another: ~32 serial round-trips through the
+	 * KernelSU bridge on every page load, every 刷新, and after every
+	 * save/reload -- measured maxInFlight=1 with 33 calls per run. Order
+	 * below matches the destructuring order exactly.
+	 */
+	const [
+		targetText,
+		hideText,
+		scopeText,
+		denyPkgText,
+		allowPkgText,
+		denyUidText,
+		allowUidText,
+		allowSystemUidText,
+		waitText,
+		enableSyscallHooksText,
+		syscallHooksText,
+		autoSceneDebugfsText,
+		sceneDebugfsPathsText,
+		sceneDebugfsStateText,
+		bootStateText,
+		moduleText,
+		legacyModuleText,
+		sysDenyUids,
+		sysResolvedCount,
+		procguardConfText,
+		writePolicyText,
+		procguardModuleText,
+		procguardKoInfo,
+		procguardHits,
+		procguardMissed,
+		procguardGid,
+		koInfo,
+		moduleFlags,
+		legacyConfigInfo,
+		loadFailCountText,
+		loadFailReasonText,
+		nowText,
+	] = await mapLimit([
+		() => readFile(files.targets),
+		() => readFile(files.hideDirents),
+		() => readFile(files.scope),
+		() => readFile(files.denyPackages),
+		() => readFile(files.allowPackages),
+		() => readFile(files.denyUids),
+		() => readFile(files.allowUids),
+		() => readFileOrDefault(files.allowSystemUids, DEFAULT_ALLOW_SYSTEM_UIDS),
+		() => readFile(files.waitSeconds),
+		() => readFile(files.enableSyscallHooks),
+		() => readFile(files.syscallHooks),
+		() => readFile(files.autoSceneDebugfs),
+		() => readFile(files.sceneDebugfsPaths),
+		() => readFile(files.sceneDebugfsState),
+		() => readFile(files.bootState),
+		() => safeExec(`grep '^${MODULE_NAME} ' /proc/modules || true`),
+		() => safeExec(`grep '^${LEGACY_MODULE_NAME} ' /proc/modules || true`),
+		() => safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/deny_uids ] && cat /sys/module/${MODULE_NAME}/parameters/deny_uids || true`),
+		() => safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/resolved_count ] && cat /sys/module/${MODULE_NAME}/parameters/resolved_count || true`),
+		() => readFile(files.procguardConf),
+		() => readFile(files.writeOpPolicy),
+		() => safeExec(`grep '^${PROCGUARD_MODULE_NAME} ' /proc/modules || true`),
+		() => safeExec(`[ -f ${shellQuote(files.procguardKo)} ] && echo present || echo missing`),
+		() => safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/blocked_hits ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/blocked_hits || true`),
+		() => safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/missed ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/missed || true`),
+		() => safeExec(`[ -f /sys/module/${PROCGUARD_MODULE_NAME}/parameters/target_gid ] && cat /sys/module/${PROCGUARD_MODULE_NAME}/parameters/target_gid || true`),
+		() => safeExec(`[ -f ${shellQuote(files.ko)} ] && ls -l ${shellQuote(files.ko)} || echo missing`),
+		() => safeExec(`ls -1 ${shellQuote(MODDIR)}/disable ${shellQuote(MODDIR)}/remove 2>/dev/null || true`),
+		() => safeExec(`[ -d ${shellQuote(LEGACY_CONFIGDIR)} ] && echo ${shellQuote(LEGACY_CONFIGDIR)} || true`),
+		() => readFile(files.failCount),
+		() => readFile(files.failReason),
+		() => safeExec(`date +%s 2>/dev/null || echo 0`),
+	], REFRESH_CONCURRENCY);
 
 	renderPaths(linesFromText(targetText));
 	$("#hideDirentsInput").checked = (hideText.trim() || "1") !== "0";
@@ -3403,9 +3562,14 @@ async function validateConfig(options = {}) {
 	}
 
 	if ((scope === "deny" || scope === "allow") && packages.length) {
+		// -F (fixed string) matters: package names always contain ".",
+		// which a basic regex reads as "any character", so com.foo.bar
+		// also matched comXfooXbar and reported OK for names that are
+		// not installed -- defeating the point of the probe. -- stops a
+		// leading dash from being parsed as an option.
 		const packageProbe = await safeExec(`
 for p in ${packages.map(shellQuote).join(" ")}; do
-	if [ -f /data/system/packages.list ] && grep -q "^$p " /data/system/packages.list 2>/dev/null; then
+	if [ -f /data/system/packages.list ] && grep -qF -- "$p " /data/system/packages.list 2>/dev/null; then
 		echo "OK $p"
 	else
 		echo "MISS $p"
@@ -3462,11 +3626,20 @@ async function saveConfig() {
 	showToast(t("已保存，重启后生效"));
 }
 
-const WRITE_POLICY_LABELS = {
-	passthrough: t("跟随原厂"),
-	eacces: t("伪装不存在"),
-	enoent: t("旧版行为"),
-};
+/*
+ * Resolved on demand rather than captured in a module-scope object.
+ * A top-level `const` evaluates t() exactly once at load time, so the
+ * labels kept coming back Chinese after the user switched the UI to
+ * English -- refreshRenderedText() has no way to rebuild a const.
+ */
+function writePolicyLabel(value) {
+	switch (value) {
+		case "eacces": return t("伪装不存在");
+		case "enoent": return t("旧版行为");
+		case "passthrough":
+		default: return t("跟随原厂");
+	}
+}
 
 // write_op_policy is an insmod parameter fed by service.sh from the
 // persistent conf, so switching it requires a full module reload. The
@@ -3481,7 +3654,7 @@ async function applyWritePolicy() {
 	);
 	setLogContent("kernel", output);
 	await refreshDiagnostics();
-	showToast(t(`写入伪装已切换为「{0}」`, [WRITE_POLICY_LABELS[value] || value]));
+	showToast(t(`写入伪装已切换为「{0}」`, [writePolicyLabel(value)]));
 }
 
 async function reloadModule() {
@@ -3797,7 +3970,17 @@ async function selectHistory(path, liElem) {
 
 function switchTab(tab) {
 	for (const button of $$(".tab")) {
-		button.classList.toggle("active", button.dataset.tab === tab);
+		const active = button.dataset.tab === tab;
+		button.classList.toggle("active", active);
+		/*
+		 * Roving tabindex per the ARIA tabs pattern: only the selected
+		 * tab is in the tab sequence, and arrow keys move between them
+		 * (wired below). Without aria-selected the five buttons were
+		 * announced identically, with nothing to say which page was
+		 * actually showing.
+		 */
+		button.setAttribute("aria-selected", String(active));
+		button.tabIndex = active ? 0 : -1;
 	}
 	for (const panel of $$(".tabPanel")) {
 		panel.classList.toggle("active", panel.id === `${tab}Panel`);
@@ -3808,7 +3991,9 @@ function switchLog(log) {
 	activeLog = log;
 	activeLogPage = 0;
 	for (const button of $$(".logTab")) {
-		button.classList.toggle("active", button.dataset.log === log);
+		const active = button.dataset.log === log;
+		button.classList.toggle("active", active);
+		button.setAttribute("aria-pressed", String(active));
 	}
 	renderLogPage();
 }
@@ -3830,6 +4015,37 @@ function closeModal(id) {
 	const modal = document.getElementById(id);
 	if (!modal) return;
 	modal.hidden = true;
+	// Dismissing the confirm dialog by backdrop click or Escape is a "no".
+	if (id === "confirmModal") settleConfirm(false);
+}
+
+/*
+ * In-page confirmation. window.confirm() is not usable here: a WebView
+ * whose host does not implement onJsConfirm returns false silently, so a
+ * destructive action would present as a dead button instead of asking.
+ * Resolves true only for 确定; every dismissal path resolves false. If
+ * the dialog markup is somehow missing we fail closed rather than
+ * proceeding with a destructive action unconfirmed.
+ */
+let confirmResolver = null;
+
+function confirmAction(message) {
+	const modal = $("#confirmModal");
+	const body = $("#confirmBody");
+	if (!modal || !body) return Promise.resolve(false);
+	return new Promise((resolve) => {
+		body.textContent = message;
+		confirmResolver = resolve;
+		openModal("confirmModal");
+	});
+}
+
+function settleConfirm(result) {
+	const resolve = confirmResolver;
+	confirmResolver = null;
+	const modal = $("#confirmModal");
+	if (modal) modal.hidden = true;
+	if (resolve) resolve(result);
 }
 
 document.addEventListener("click", (event) => {
@@ -3875,6 +4091,15 @@ $("#autoSceneDebugfsInput").addEventListener("change", () => {
 for (const cb of document.querySelectorAll('#allowSystemUidsDetails input[data-allow-system-uid]')) {
 	cb.addEventListener("change", updateHealthList);
 }
+$("#confirmOkBtn").addEventListener("click", () => settleConfirm(true));
+$("#confirmCancelBtn").addEventListener("click", () => settleConfirm(false));
+
+// The 系统应用 flag is only read inside loadApps(), so without this the
+// checkbox appeared to do nothing until 加载 was pressed again.
+$("#showSystemInput").addEventListener("change", () => {
+	runAction(t("正在加载应用..."), loadApps).catch(() => {});
+});
+
 $("#searchInput").addEventListener("input", renderApps);
 $("#saveBtn").addEventListener("click", () => runAction(t("正在保存..."), saveConfig).catch(() => {}));
 $("#pauseBtn").addEventListener("click", () => runAction(t("正在暂停隐藏..."), pauseHiding).catch(() => {}));
@@ -3884,7 +4109,24 @@ $("#validateConfigBtn").addEventListener("click", () => runAction(t("正在校�
 $("#refreshLogsBtn").addEventListener("click", () => runAction(t("正在刷新日志..."), refreshDiagnostics).catch(() => {}));
 $("#copyReportBtn").addEventListener("click", () => copyText(lastReport || buildReport()).catch((error) => showToast(error.message)));
 $("#copyReportBtn2").addEventListener("click", () => copyText($("#reportOutput").value).catch((error) => showToast(error.message)));
-$("#resetDefaultsBtn").addEventListener("click", () => runAction(t("正在恢复默认配置..."), restoreDefaults).catch(() => {}));
+$("#resetDefaultsBtn").addEventListener("click", () => {
+	/*
+	 * Confirm before running: restoreDefaults() overwrites every *.conf --
+	 * including blanking allow_packages / deny_uids / allow_uids -- and the
+	 * refreshConfig() it ends with also discards any edits still unsaved in
+	 * the form. It sits one tap away in a "快速操作" grid next to 复制诊断
+	 * 报告 and there is no undo. Confirmed outside runAction so the busy
+	 * lock is not held while the prompt is on screen.
+	 */
+	confirmAction(t("恢复默认配置会覆盖所有 *.conf（清空白名单包名和直接 UID），并丢弃页面上未保存的修改。确定继续？"))
+		.then((proceed) => {
+			if (!proceed) {
+				showToast(t("已取消，配置未改动"));
+				return undefined;
+			}
+			return runAction(t("正在恢复默认配置..."), restoreDefaults).catch(() => {});
+		});
+});
 $("#prevLogBtn").addEventListener("click", () => {
 	activeLogPage -= 1;
 	renderLogPage();
@@ -3894,8 +4136,23 @@ $("#nextLogBtn").addEventListener("click", () => {
 	renderLogPage();
 });
 
-for (const button of $$(".tab")) {
+const tabButtons = $$(".tab");
+for (const button of tabButtons) {
 	button.addEventListener("click", () => switchTab(button.dataset.tab));
+	button.addEventListener("keydown", (event) => {
+		// Arrow-key navigation for the ARIA tabs pattern; the roving
+		// tabindex maintained by switchTab() keeps exactly one tab in
+		// the tab sequence.
+		const step = event.key === "ArrowRight" ? 1
+			: event.key === "ArrowLeft" ? -1
+				: 0;
+		if (!step) return;
+		event.preventDefault();
+		const index = tabButtons.indexOf(button);
+		const next = tabButtons[(index + step + tabButtons.length) % tabButtons.length];
+		switchTab(next.dataset.tab);
+		next.focus();
+	});
 }
 
 for (const button of $$(".logTab")) {
@@ -3926,33 +4183,31 @@ for (const button of $$(".langOption")) {
 }
 applyStaticText();
 
-try {
-	runAction(t("正在读取配置..."), refreshConfig).then(() => {
-		// Auto-run diagnostics on page load when service.sh has
-		// already finished (loaded / skipped-* / failed-*). For
-		// waiting states we let scheduleBootPolling pick up the
-		// transition and trigger then. For paused / unknown we
-		// still run -- the verdict will reflect the actual state.
-		const state = (lastSnapshot.bootState && lastSnapshot.bootState.state) || "";
-		if (state && !BOOT_WAITING_STATES.has(state)) {
-			autoRunDiagnostic(t("自动诊断中（页面加载）..."));
-		} else if (!state) {
-			// No boot_state file at all -- service.sh likely never
-			// ran. Still run a diagnostic so the verdict catches it.
-			autoRunDiagnostic(t("自动诊断中（页面加载）..."));
-		}
-	}).catch((error) => {
-		statusText.textContent = t("读取失败");
-		showToast(error.message);
-	});
-} catch (error) {
-	// Synchronous failure during top-level setup. Surface it loudly
-	// so the WebUI doesn't get stuck on the HTML default status text
-	// with no clue what went wrong.
-	statusText.textContent = t("脚本初始化失败");
-	if (typeof toast !== "undefined" && toast) {
-		toast.textContent = error && error.message ? error.message : String(error);
-		toast.hidden = false;
+/*
+ * No try/catch around the bootstrap. runAction() is async, so it converts
+ * a synchronous throw into a rejected promise and a surrounding try can
+ * never observe it -- the catch that used to sit here was unreachable, and
+ * the code that genuinely can throw synchronously (the $("#id")
+ * .addEventListener bindings above, where a renamed or removed id makes $
+ * return null) was outside it. Any synchronous failure in this file is
+ * already reported by the window "error" trap installed at the very top,
+ * which writes the message and location into #statusText; the .catch()
+ * below covers the async path.
+ */
+runAction(t("正在读取配置..."), refreshConfig).then(() => {
+	// Auto-run diagnostics on page load when service.sh has
+	// already finished (loaded / skipped-* / failed-*). For
+	// waiting states we let scheduleBootPolling pick up the
+	// transition and trigger then. For paused / unknown we
+	// still run -- the verdict will reflect the actual state.
+	const state = (lastSnapshot.bootState && lastSnapshot.bootState.state) || "";
+	if (state && !BOOT_WAITING_STATES.has(state)) {
+		autoRunDiagnostic(t("自动诊断中（页面加载）..."));
+	} else if (!state) {
+		// No boot_state file at all -- service.sh likely never
+		// ran. Still run a diagnostic so the verdict catches it.
+		autoRunDiagnostic(t("自动诊断中（页面加载）..."));
 	}
-	throw error;
-}
+}).catch((error) => {
+	setStatusError(t("读取失败"), error);
+});
