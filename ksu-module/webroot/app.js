@@ -5,14 +5,30 @@
 // errors thrown above it). This handler writes the error directly
 // into #statusText so we can debug from the WebUI alone, without
 // needing chrome://inspect to be reachable.
+//
+// It must never depend on anything declared further down this file.
+// `uiLang` is a `let` and EN_TEXT a `const`, both initialised hundreds
+// of lines below, so reading them from here before their initialiser
+// has run throws a TDZ ReferenceError *inside the trap* -- which is
+// precisely the window where the trap is most likely to fire, and the
+// failure it would then report is the one thing that stays invisible.
+// trapText() degrades to the Chinese source instead.
+function trapText(zh, en) {
+	try {
+		return uiLang === "en" ? en : zh;
+	} catch (error) {
+		return zh;
+	}
+}
+
 window.addEventListener("error", (event) => {
-	const msg = event && event.message ? event.message : t("未知错误");
+	const msg = event && event.message ? event.message : trapText("未知错误", "unknown error");
 	const where = event && event.filename
 		? `${event.filename}:${event.lineno}:${event.colno}`
 		: "";
 	const status = document.getElementById("statusText");
 	if (status) {
-		status.textContent = t(`脚本错误：{0} {1}`, [msg, where]);
+		status.textContent = `${trapText("脚本错误：", "Script error: ")}${msg} ${where}`;
 		status.style.color = "#c01c28";
 	}
 });
@@ -22,7 +38,7 @@ window.addEventListener("unhandledrejection", (event) => {
 		: typeof reason === "string" ? reason : String(reason);
 	const status = document.getElementById("statusText");
 	if (status) {
-		status.textContent = t(`Promise 错误：{0}`, [msg]);
+		status.textContent = `${trapText("Promise 错误：", "Promise error: ")}${msg}`;
 		status.style.color = "#c01c28";
 	}
 });
@@ -286,14 +302,14 @@ const EN_TEXT = {
 	// Bridge / boot failures (the WebUI still renders when these fire).
 	"KernelSU WebUI API 不可用": "The KernelSU WebUI API is not available",
 	"命令失败：{errno}": "Command failed: {errno}",
+	"命令超时（{0} 秒），已放弃等待": "The command timed out after {0}s and was abandoned",
 	"读取失败": "Failed to read the configuration",
 	"脚本初始化失败": "Script initialisation failed",
 
-	// Error traps (they can fire before EN_TEXT exists, so t() stays safe
-	// and falls back to the Chinese source in that window).
-	"未知错误": "unknown error",
-	"脚本错误：{0} {1}": "Script error: {0} {1}",
-	"Promise 错误：{0}": "Promise error: {0}",
+	// The two global error traps translate through trapText() with
+	// inline literals instead of t(), because they can fire while
+	// EN_TEXT and uiLang are still in their TDZ. Nothing for them is
+	// keyed here.
 
 	// Health list (Diagnostics tab).
 	"旧 nohello 模块仍在运行": "The legacy nohello module is still running",
@@ -596,6 +612,9 @@ const EN_TEXT = {
 	"没有可复制内容": "Nothing to copy",
 	"已复制": "Copied",
 	"已加载 {0} 个应用": "Loaded {0} apps",
+	"共 {0} 个应用": "{0} apps",
+	"显示前 {0} 个，共匹配 {1} 个应用；输入包名或应用名可缩小范围":
+		"Showing the first {0} of {1} matches; type a package or app name to narrow it down",
 	"当前模块包未包含 procguard.ko，防护不可用":
 		"This module package does not include procguard.ko, so the guard is unavailable",
 	"procguard 已加载：已拦截 {0} 次隔离进程对 gid {1} 的查询（missed={2}）":
@@ -751,6 +770,8 @@ const EN_TEXT = {
 	"恢复默认配置": "Restore defaults",
 	"日志分页": "Log pages",
 	"刷新日志": "Refresh logs",
+	"日志类别": "Log categories",
+	"日志内容": "Log contents",
 	"状态": "Status",
 	"配置": "Config",
 	"内核": "Kernel",
@@ -913,12 +934,40 @@ function setUiLang(lang) {
  * survive a language switch.
  */
 function refreshRenderedText() {
-	if (!lastSnapshot || !lastSnapshot.targetText) return;
+	// The parts that would invent a state (a status line claiming the
+	// module is not loaded, a procguard line claiming the .ko is
+	// missing) stay out until something has actually been read. The
+	// rest -- scope copy, health list, app rows, path rows, verdict --
+	// renders unconditionally: the old version bailed out entirely when
+	// the config read had failed, which left the page stuck half
+	// translated with no way to finish the switch.
+	const hasSnapshot = !!lastSnapshot && Object.keys(lastSnapshot).length > 0;
 	updateScopeCopy(currentScope());
-	updateSummary(lastSnapshot);
-	renderProcguard(lastSnapshot);
-	if (lastSnapshot.sceneDebugfsState || lastSnapshot.sceneDebugfsPathsText) {
-		updateAutoSceneDebugfsStatus(lastSnapshot);
+	if (hasSnapshot) {
+		updateSummary(lastSnapshot);
+		renderProcguard(lastSnapshot);
+		if (lastSnapshot.sceneDebugfsState || lastSnapshot.sceneDebugfsPathsText) {
+			updateAutoSceneDebugfsStatus(lastSnapshot);
+		}
+		if (lastSnapshot.facts) {
+			// Recompute rather than replay. verdict.headline and its
+			// suggestions were produced by computeVerdict() through t(),
+			// so the stored strings are in whatever language was active
+			// when the diagnostic ran. computeVerdict is a pure rule
+			// engine over facts and every fact is language-neutral, so
+			// re-running it is cheap and is the only way to get the new
+			// wording without re-probing the device.
+			lastSnapshot.verdict = computeVerdict(lastSnapshot.facts);
+			renderVerdictPanel(lastSnapshot);
+			// Same reasoning for the two log tabs whose content is
+			// partly generated: the kernel tab is dmesg-or-a-translated
+			// reason, the script tab is logcat-or-a-translated reason.
+			// The status and config tabs are raw shell output with
+			// nothing to re-translate.
+			setLogContent("kernel", kernelLogText(lastSnapshot.facts));
+			setLogContent("script", lastSnapshot.scriptLog
+				|| scriptLogFallbackText(lastSnapshot.scriptLogDetail));
+		}
 	}
 	updateHealthList();
 	renderApps();
@@ -927,6 +976,49 @@ function refreshRenderedText() {
 		lastReport = buildReport(lastSnapshot);
 		$("#reportOutput").value = lastReport;
 	}
+	remeasureChrome();
+}
+
+/*
+ * Sticky-offset measurement.
+ *
+ * `.tabs` sticks below the top bar and `body` reserves room for the
+ * fixed footer, but both offsets used to be hardcoded (67px / 92px) and
+ * neither matched the rendered layout: the top bar measures ~73px even
+ * at 1x, so the tab row sat partly behind it, and it grows further
+ * whenever #statusText wraps -- which is exactly what a long bridge or
+ * boot error does. System font scaling and the wider English labels make
+ * the footer height move too. Measure both and publish them as custom
+ * properties so the layout tracks reality instead of a constant.
+ */
+let applyChromeOffsets = () => {};
+
+function observeChromeOffsets() {
+	const root = document.documentElement;
+	const topbar = $(".topbar");
+	const actions = $(".actions");
+
+	applyChromeOffsets = () => {
+		if (topbar) root.style.setProperty("--topbar-h", `${Math.ceil(topbar.offsetHeight)}px`);
+		if (actions) root.style.setProperty("--actions-h", `${Math.ceil(actions.offsetHeight)}px`);
+	};
+	applyChromeOffsets();
+
+	// ResizeObserver is Chrome 64+; every WebView that can run this
+	// page has it, but jsdom and ancient builds do not, and a static
+	// measurement plus a resize listener is still far better than the
+	// constant it replaces.
+	if (typeof ResizeObserver === "undefined") {
+		window.addEventListener("resize", applyChromeOffsets);
+		return;
+	}
+	const observer = new ResizeObserver(() => applyChromeOffsets());
+	if (topbar) observer.observe(topbar);
+	if (actions) observer.observe(actions);
+}
+
+function remeasureChrome() {
+	applyChromeOffsets();
 }
 
 const actionButtons = [
@@ -956,15 +1048,51 @@ function getKsuBridge() {
 	return null;
 }
 
-function execShell(command) {
+/*
+ * The bridge callback is the only thing that can settle an execShell
+ * promise, so a command the manager never answers -- a wedged root
+ * shell, a service killed mid-command, a WebView that lost the
+ * JavascriptInterface -- used to leave the promise pending forever.
+ * runAction() only releases `busy` in its finally block, so one lost
+ * callback disabled every action button on the page for the rest of its
+ * life, with no way to recover short of leaving and reopening the WebUI.
+ * The watchdog turns that permanent lockout into a reported, retryable
+ * error. 90s is well past the slowest legitimate command here (a hot
+ * reload runs service.sh with a 5s wait budget plus rmmod and dmesg).
+ */
+/*
+ * Overridable so the harness in tools/tests/webui can exercise the
+ * timeout path in milliseconds instead of waiting out a real 90s. A
+ * page that never sets the global gets the default.
+ */
+const EXEC_TIMEOUT_MS = (() => {
+	const override = Number(typeof window !== "undefined" && window.__pathmaskExecTimeoutMs);
+	return Number.isFinite(override) && override > 0 ? override : 90000;
+})();
+
+function execShell(command, options = {}) {
 	const bridge = getKsuBridge();
 	if (!bridge) throw new Error(t("KernelSU WebUI API 不可用"));
 
+	const timeoutMs = options.timeoutMs || EXEC_TIMEOUT_MS;
+
 	return new Promise((resolve, reject) => {
 		const callbackName = `pathmask_exec_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+		let timer = 0;
+
+		// Single exit point so the watchdog and the callback can never
+		// both settle the promise, and neither leaks the global or the
+		// timer.
+		const settle = (finish, value) => {
+			if (timer) {
+				clearTimeout(timer);
+				timer = 0;
+			}
+			delete window[callbackName];
+			finish(value);
+		};
 
 		window[callbackName] = (errno, stdout, stderr) => {
-			delete window[callbackName];
 			if (errno && errno !== 0) {
 				const err = new Error(stderr || stdout || t("命令失败：{errno}", { errno }));
 				// Preserve the raw fields so callers that want to
@@ -975,11 +1103,19 @@ function execShell(command) {
 				err.errno = errno;
 				err.stderr = stderr || "";
 				err.stdout = stdout || "";
-				reject(err);
+				settle(reject, err);
 				return;
 			}
-			resolve(stdout || "");
+			settle(resolve, stdout || "");
 		};
+
+		timer = setTimeout(() => {
+			timer = 0;
+			delete window[callbackName];
+			const err = new Error(t("命令超时（{0} 秒），已放弃等待", [Math.round(timeoutMs / 1000)]));
+			err.timeout = true;
+			reject(err);
+		}, timeoutMs);
 
 		try {
 			bridge.exec(command, JSON.stringify({}), callbackName);
@@ -987,8 +1123,12 @@ function execShell(command) {
 			try {
 				bridge.exec(command, callbackName);
 			} catch (fallbackError) {
-				delete window[callbackName];
-				reject(fallbackError);
+				// Report the first failure: it is the one that came
+				// from the documented three-argument form, so it says
+				// something true about the bridge. The retry's error
+				// usually just complains about a malformed options
+				// argument and hides the real cause.
+				settle(reject, error);
 			}
 		}
 	});
@@ -1391,43 +1531,169 @@ function parsePackageLine(line) {
 	return { pkg: match[1], uid: match[2] };
 }
 
-function renderApps() {
-	const query = $("#searchInput").value.trim().toLowerCase();
-	appList.textContent = "";
+/*
+ * Rendering cap. A device with "系统应用" enabled can list 400+ packages;
+ * building that many labelled rows on every keystroke of the search box
+ * is visibly laggy on a phone, and nobody scrolls to row 300 to find an
+ * app they could have typed two characters of. The count line below the
+ * search box says how many were held back.
+ */
+const APP_RENDER_LIMIT = 200;
 
-	const filtered = apps
-		.filter((app) => !query || app.pkg.toLowerCase().includes(query))
-		.sort((a, b) => {
-			const selectedA = selectedPackages.has(a.pkg);
-			const selectedB = selectedPackages.has(b.pkg);
-			if (selectedA !== selectedB) return selectedA ? -1 : 1;
-			return a.pkg.localeCompare(b.pkg);
-		});
-	for (const app of filtered) {
-		const row = document.createElement("label");
-		row.className = selectedPackages.has(app.pkg) ? "appRow selected" : "appRow";
+function appMatchesQuery(app, query) {
+	if (!query) return true;
+	return app.pkg.toLowerCase().includes(query)
+		|| (app.label || "").toLowerCase().includes(query)
+		|| String(app.uid || "").includes(query);
+}
 
-		const checkbox = document.createElement("input");
-		checkbox.type = "checkbox";
-		checkbox.checked = selectedPackages.has(app.pkg);
-		checkbox.addEventListener("change", () => {
-			if (checkbox.checked) selectedPackages.add(app.pkg);
-			else selectedPackages.delete(app.pkg);
-			renderApps();
-			updateHealthList();
-		});
+function buildAppRow(app) {
+	const row = document.createElement("label");
+	row.className = selectedPackages.has(app.pkg) ? "appRow selected" : "appRow";
 
-		const pkg = document.createElement("div");
-		pkg.className = "pkg";
-		pkg.textContent = app.pkg;
+	const checkbox = document.createElement("input");
+	checkbox.type = "checkbox";
+	checkbox.checked = selectedPackages.has(app.pkg);
+	checkbox.addEventListener("change", () => {
+		if (checkbox.checked) selectedPackages.add(app.pkg);
+		else selectedPackages.delete(app.pkg);
+		// In-place only. The previous version called renderApps()
+		// here, which re-sorts selected rows to the top and rebuilds
+		// the list from an empty container -- so the row you had just
+		// ticked moved away from the pointer and the scroll position
+		// reset to the top. Selecting several apps in a row meant
+		// hunting for each one again.
+		row.classList.toggle("selected", checkbox.checked);
+		updateHealthList();
+	});
 
-		const uid = document.createElement("div");
-		uid.className = "uid";
-		uid.textContent = app.uid;
-
-		row.append(checkbox, pkg, uid);
-		appList.append(row);
+	const text = document.createElement("div");
+	text.className = "pkg";
+	const name = document.createElement("span");
+	name.className = "pkgName";
+	name.textContent = app.pkg;
+	text.append(name);
+	if (app.label && app.label !== app.pkg) {
+		const label = document.createElement("small");
+		label.className = "pkgLabel";
+		label.textContent = app.label;
+		text.append(label);
 	}
+
+	const uid = document.createElement("div");
+	uid.className = "uid";
+	uid.textContent = app.uid;
+
+	row.append(checkbox, text, uid);
+	return row;
+}
+
+function renderApps() {
+	if (!appList) return;
+	const searchInput = $("#searchInput");
+	const query = (searchInput ? searchInput.value : "").trim().toLowerCase();
+	// Search input, scope switches and language switches all rebuild
+	// this list; without carrying the offset over, typing one character
+	// threw the reader back to the top of a scrollable 340px box.
+	const scrollTop = appList.scrollTop;
+
+	const filtered = apps.filter((app) => appMatchesQuery(app, query));
+	filtered.sort((a, b) => {
+		const selectedA = selectedPackages.has(a.pkg);
+		const selectedB = selectedPackages.has(b.pkg);
+		if (selectedA !== selectedB) return selectedA ? -1 : 1;
+		return a.pkg.localeCompare(b.pkg);
+	});
+
+	const shown = filtered.slice(0, APP_RENDER_LIMIT);
+	// One append instead of one per row: appending to a live element in
+	// a loop makes the engine re-run layout for each row.
+	const fragment = document.createDocumentFragment();
+	for (const app of shown) fragment.append(buildAppRow(app));
+
+	appList.textContent = "";
+	appList.append(fragment);
+	appList.scrollTop = scrollTop;
+
+	updateAppListCount(filtered.length, shown.length);
+}
+
+function updateAppListCount(matched = 0, shown = 0) {
+	const node = $("#appListCount");
+	if (!node) return;
+	if (!apps.length) {
+		node.textContent = "";
+		node.hidden = true;
+		return;
+	}
+	node.hidden = false;
+	node.textContent = matched > shown
+		? t("显示前 {0} 个，共匹配 {1} 个应用；输入包名或应用名可缩小范围", [shown, matched])
+		: t("共 {0} 个应用", [matched]);
+}
+
+/*
+ * KernelSU injects a native package API next to exec: listPackages(type)
+ * with type "user" | "system" | "all", and getPackagesInfo(names)
+ * returning { packageName, appLabel, isSystem, uid, versionName }.
+ *
+ * Preferring it over `pm list packages -U` fixes three things at once:
+ * rows can show the human-readable app label instead of a bare package
+ * name; the 系统应用 toggle filters on the manager's own isSystem flag
+ * rather than on `pm -3`, which disagrees with it for preinstalled and
+ * updated-system apps; and no `pm` subprocess is spawned, which on some
+ * devices costs seconds and is the usual reason 加载 looks like it hung.
+ *
+ * Older managers only inject exec, so the shell path stays as fallback.
+ */
+function loadAppsFromNativeBridge(bridge) {
+	const showSystem = $("#showSystemInput").checked;
+	const names = bridge.listPackages(showSystem ? "all" : "user");
+	if (!Array.isArray(names) || names.length === 0) return null;
+	const infos = bridge.getPackagesInfo(names);
+	if (!Array.isArray(infos) || infos.length === 0) return null;
+	return infos
+		.filter((info) => info && info.packageName)
+		.map((info) => ({
+			pkg: info.packageName,
+			uid: info.uid === undefined || info.uid === null ? "" : String(info.uid),
+			label: info.appLabel || "",
+			system: !!info.isSystem,
+		}))
+		.sort((a, b) => a.pkg.localeCompare(b.pkg));
+}
+
+async function loadAppsFromShell() {
+	const showSystem = $("#showSystemInput").checked;
+	const command = showSystem ? "pm list packages -U" : "pm list packages -U -3";
+	const output = await execShell(command);
+	return output.split(/\r?\n/)
+		.map(parsePackageLine)
+		.filter(Boolean)
+		.sort((a, b) => a.pkg.localeCompare(b.pkg));
+}
+
+async function loadApps() {
+	statusText.textContent = t("正在加载应用...");
+	const bridge = getKsuBridge();
+	let next = null;
+	if (bridge && typeof bridge.listPackages === "function" &&
+	    typeof bridge.getPackagesInfo === "function") {
+		try {
+			next = loadAppsFromNativeBridge(bridge);
+		} catch (error) {
+			// A manager that advertises the API but throws on it
+			// (or returns something unparseable) still has a working
+			// exec bridge, so fall through rather than failing the
+			// whole panel.
+			next = null;
+		}
+	}
+	if (!next) next = await loadAppsFromShell();
+	apps = next;
+	appList.scrollTop = 0;
+	renderApps();
+	showToast(t(`已加载 {0} 个应用`, [apps.length]));
 }
 
 function renderHealth(items) {
@@ -1783,13 +2049,60 @@ const TAINT_FLAGS = [
 
 function decodeTaint(value) {
 	const v = Number.parseInt(String(value || "").trim(), 10);
-	if (!Number.isFinite(v) || v <= 0) return { value: 0, names: [], pretty: t("0 (干净)") };
+	if (!Number.isFinite(v) || v <= 0) return { value: 0, names: [] };
 	const names = TAINT_FLAGS.filter(({ bit }) => v & (1 << bit)).map(({ name }) => name);
-	return {
-		value: v,
-		names,
-		pretty: names.length ? `${v} = ${names.join(" + ")}` : t(`{0} (未识别)`, [v]),
-	};
+	return { value: v, names };
+}
+
+/*
+ * Render-time formatters for the diagnostic facts.
+ *
+ * Facts stay language-neutral -- a bitmask, a `kind` discriminator, an
+ * epoch -- and the wording is produced here. That is what lets the
+ * verdict box, the report and the kernel log tab be re-rendered in the
+ * other language without re-running a single probe. Translating at
+ * gather time instead would freeze those strings in whatever language
+ * the diagnostic happened to run in.
+ */
+function taintPretty(info) {
+	if (!info) return "";
+	if (info.value <= 0) return t("0 (干净)");
+	return info.names.length
+		? `${info.value} = ${info.names.join(" + ")}`
+		: t("{0} (未识别)", [info.value]);
+}
+
+function dmesgReason(state) {
+	if (!state || state.available) return "";
+	switch (state.kind) {
+		case "denied":
+			return t("权限被拒（SELinux / capabilities / dmesg_restrict）");
+		case "restricted":
+			return t("dmesg_restrict=1（系统锁定，root WebUI shell 也无权读，部分 OnePlus / OEM ROM 默认如此）");
+		case "failed":
+			return t("dmesg 命令失败（{0}）", [state.detail || t("未知")]);
+		case "empty":
+			return t("dmesg 无 pathmask 相关行");
+		default:
+			return "";
+	}
+}
+
+function kernelLogText(facts) {
+	if (!facts) return "";
+	return facts.dmesgState.available
+		? (facts.dmesgRaw || t("(dmesg 中没有 pathmask 相关行)"))
+		: t("(dmesg 不可读：{0})", [dmesgReason(facts.dmesgState)]);
+}
+
+// `detail` is the raw stderr / errno text from the logcat probe; empty
+// means logcat worked and simply had nothing to say.
+function scriptLogReasonText(detail) {
+	return detail ? t("logcat 不可读（{0}）", [detail]) : "";
+}
+
+function scriptLogFallbackText(detail) {
+	return t("({0})", [scriptLogReasonText(detail) || t("无 pathmask 相关 logcat")]);
 }
 
 /*
@@ -2005,28 +2318,29 @@ true
 	// not "kernel never logged anything about us". Distinguish so
 	// the report stops lying about it. Order: explicit error
 	// (EPERM in stderr) > dmesg_restrict gate > really empty.
+	//
+	// Stored as a `kind` discriminator rather than a finished string:
+	// the reason is rendered through dmesgReason() so it follows the
+	// current UI language. Translating here would freeze it in whatever
+	// language the diagnostic happened to run in, and a later switch to
+	// English would leave a Chinese line in the middle of the report.
 	let dmesgState;
 	const dmesgErr = (dmesgRes && (dmesgRes.stderr || "")) || "";
 	if (dmesgRaw && !/Operation not permitted|Permission denied/i.test(dmesgRaw)) {
-		dmesgState = { available: true, reason: "" };
+		dmesgState = { available: true, kind: "" };
 	} else if (/Operation not permitted|Permission denied/i.test(dmesgErr) ||
 	           /Operation not permitted|Permission denied/i.test(dmesgRaw)) {
-		dmesgState = {
-			available: false,
-			reason: t("权限被拒（SELinux / capabilities / dmesg_restrict）"),
-		};
+		dmesgState = { available: false, kind: "denied" };
 	} else if (dmesgRestrict === "1") {
-		dmesgState = {
-			available: false,
-			reason: t("dmesg_restrict=1（系统锁定，root WebUI shell 也无权读，部分 OnePlus / OEM ROM 默认如此）"),
-		};
+		dmesgState = { available: false, kind: "restricted" };
 	} else if (!dmesgRes || !dmesgRes.ok) {
 		dmesgState = {
 			available: false,
-			reason: t(`dmesg 命令失败（{0}）`, [(dmesgRes && (dmesgRes.stderr || dmesgRes.error)) || t("未知")]),
+			kind: "failed",
+			detail: (dmesgRes && (dmesgRes.stderr || dmesgRes.error)) || "",
 		};
 	} else {
-		dmesgState = { available: false, reason: t("dmesg 无 pathmask 相关行") };
+		dmesgState = { available: false, kind: "empty" };
 	}
 
 	const koSha = ok(kosumRes);
@@ -2047,7 +2361,6 @@ true
 		bootStateUpdated = Number.parseInt(snapshot.bootState.updated || "0", 10) || 0;
 	}
 	const nowEpoch = snapshot.nowEpoch || Math.floor(Date.now() / 1000);
-	const bootStateAgeStr = secondsAgo(bootStateUpdated, nowEpoch);
 
 	const failCount = Number.parseInt(firstLine(snapshot.loadFailCountText), 10) || 0;
 	const failReason = firstLine(snapshot.loadFailReasonText);
@@ -2143,7 +2456,6 @@ true
 		bootStateName,
 		bootStateDetail,
 		bootStateUpdated,
-		bootStateAgeStr,
 		nowEpoch,
 		hasBootState: !!(snapshot.bootStateText && snapshot.bootStateText.trim()),
 		failCount,
@@ -2262,7 +2574,8 @@ function computeVerdict(facts) {
 				level: FACT_WARN,
 				headline: t("hook 已挂上但从未被任何进程触发"),
 				suggestions: [
-					t(`已经过去 {0}，dmesg 里没有任何 'hook fired (first time)' 行。`, [facts.bootStateAgeStr || t("很久")]),
+					t(`已经过去 {0}，dmesg 里没有任何 'hook fired (first time)' 行。`,
+					[secondsAgo(facts.bootStateUpdated, facts.nowEpoch) || t("很久")]),
 					t("说明黑名单里的 UID 实际上从未访问过目标路径，或者它们用了 PathMask 还没覆盖的 syscall。"),
 					t("如果你期望某个应用被拦截：在 logcat -s pathmask 里搜 hook fired，或者让应用重新启动后重测。"),
 				],
@@ -2447,9 +2760,40 @@ function computeVerdict(facts) {
 	};
 }
 
+/*
+ * Report labels are padded out to a fixed column, but the report is
+ * bilingual. String.padEnd counts code units while a CJK character
+ * occupies two cells in the monospace font the report is read in, so
+ * every Chinese label overflowed its column by roughly its own length
+ * and the 关键事实 / 内核环境 blocks came out ragged. Pad on display
+ * width instead. English labels longer than the column simply are not
+ * padded, which is the same behaviour as before and keeps the report
+ * narrow enough to read on a phone.
+ */
+const FACT_LABEL_COLUMN = 16;
+
+function displayWidth(text) {
+	let width = 0;
+	for (const ch of String(text)) {
+		const code = ch.codePointAt(0);
+		const wide = (code >= 0x1100 && code <= 0x115f) ||   // Hangul Jamo
+			(code >= 0x2e80 && code <= 0xa4cf) ||            // CJK radicals .. Yi
+			(code >= 0xac00 && code <= 0xd7a3) ||            // Hangul syllables
+			(code >= 0xf900 && code <= 0xfaff) ||            // CJK compatibility
+			(code >= 0xfe30 && code <= 0xfe6f) ||            // CJK forms / small variants
+			(code >= 0xff00 && code <= 0xff60) ||            // fullwidth forms
+			(code >= 0xffe0 && code <= 0xffe6) ||
+			(code >= 0x20000 && code <= 0x3fffd);            // CJK ext B+
+		width += wide ? 2 : 1;
+	}
+	return width;
+}
+
 function fmtFactRow(label, level, value) {
 	const glyph = STATUS_GLYPH[level] || STATUS_GLYPH[FACT_INFO];
-	return `${label.padEnd(14, " ")}${glyph} ${value}`;
+	const text = String(label);
+	const pad = Math.max(1, FACT_LABEL_COLUMN - displayWidth(text));
+	return `${text}${" ".repeat(pad)}${glyph} ${value}`;
 }
 
 function buildKeyFacts(facts) {
@@ -2473,7 +2817,8 @@ function buildKeyFacts(facts) {
 	));
 	if (facts.hasBootState) {
 		const detail = facts.bootStateDetail ? `（detail=${facts.bootStateDetail}）` : "";
-		const age = facts.bootStateAgeStr ? `（${facts.bootStateAgeStr}）` : "";
+		const ageStr = secondsAgo(facts.bootStateUpdated, facts.nowEpoch);
+		const age = ageStr ? `（${ageStr}）` : "";
 		lines.push(fmtFactRow(
 			t("开机阶段"),
 			facts.bootStateName === "loaded" && facts.moduleLoaded ? FACT_OK :
@@ -2644,7 +2989,10 @@ function buildDmesgSection(summary, raw) {
 	}
 	if (summary.targetLines.length) {
 		out.push("[target inodes]");
-		for (const t of summary.targetLines) out.push("  " + t);
+		// Not `for (const t of ...)`: that shadows the translation
+		// function for the whole loop body, and the next person to add
+		// a translated string in here gets a confusing TypeError.
+		for (const line of summary.targetLines) out.push("  " + line);
 	}
 	if (summary.hookedSymbols.length) {
 		out.push("[hooked symbols]");
@@ -2710,13 +3058,13 @@ function buildKernelEnv(facts) {
 		lines.push(fmtFactRow(
 			t("内核污染位"),
 			facts.taintInfo.value === 0 ? FACT_OK : FACT_INFO,
-			facts.taintInfo.pretty,
+			taintPretty(facts.taintInfo),
 		));
 	}
 	lines.push(fmtFactRow(
 		t("dmesg 权限"),
 		facts.dmesgState.available ? FACT_OK : FACT_WARN,
-		facts.dmesgState.available ? t("可读") : facts.dmesgState.reason,
+		facts.dmesgState.available ? t("可读") : dmesgReason(facts.dmesgState),
 	));
 	if (facts.dmesgSummary && facts.dmesgSummary.errorLines.length > 0) {
 		lines.push(fmtFactRow(
@@ -2781,13 +3129,15 @@ function buildReport(snapshot = lastSnapshot) {
 		snapshot.scriptLog && !/^ERROR:/.test(snapshot.scriptLog) && snapshot.scriptLog.trim()
 			? snapshot.scriptLog
 			: t("(无 pathmask 相关 logcat{0})", [
-				snapshot.scriptLogReason ? t("；{0}", [snapshot.scriptLogReason]) : "",
+				scriptLogReasonText(snapshot.scriptLogDetail)
+					? t("；{0}", [scriptLogReasonText(snapshot.scriptLogDetail)])
+					: "",
 			]),
 		"",
 		t("=== dmesg pathmask 相关 ==="),
 		facts.dmesgState.available
 			? buildDmesgSection(facts.dmesgSummary, facts.dmesgRaw)
-			: t(`(dmesg 不可读：{0})`, [facts.dmesgState.reason]),
+			: t(`(dmesg 不可读：{0})`, [dmesgReason(facts.dmesgState)]),
 		"",
 		t("=== 原始数据 ==="),
 		t("--- 模块状态 ---"),
@@ -2853,19 +3203,6 @@ async function copyText(text) {
 	document.execCommand("copy");
 	area.remove();
 	showToast(t("已复制"));
-}
-
-async function loadApps() {
-	statusText.textContent = t("正在加载应用...");
-	const showSystem = $("#showSystemInput").checked;
-	const command = showSystem ? "pm list packages -U" : "pm list packages -U -3";
-	const output = await execShell(command);
-	apps = output.split(/\r?\n/)
-		.map(parsePackageLine)
-		.filter(Boolean)
-		.sort((a, b) => a.pkg.localeCompare(b.pkg));
-	renderApps();
-	showToast(t(`已加载 {0} 个应用`, [apps.length]));
 }
 
 function renderProcguard(snapshot) {
@@ -2947,7 +3284,11 @@ async function refreshConfig() {
 	const nowText = await safeExec(`date +%s 2>/dev/null || echo 0`);
 
 	renderPaths(linesFromText(targetText));
-	$("#hideDirentsInput").checked = (hideText.trim() || "1") !== "0";
+	// parseBoolish, not a string compare: service.sh accepts the same
+	// human-friendly spellings for this flag, and the old
+	// `(hideText.trim() || "1") !== "0"` read a hand-edited "off" or
+	// "no" as enabled while every other boolean on the page disagreed.
+	$("#hideDirentsInput").checked = parseBoolish(hideText, true);
 	$("#enableSyscallHooksInput").checked = parseBoolish(enableSyscallHooksText, true);
 	$("#autoSceneDebugfsInput").checked = parseBoolish(autoSceneDebugfsText, DEFAULT_AUTO_SCENE_DEBUGFS);
 	applySyscallHooksToCheckboxes(syscallHooksText);
@@ -3443,56 +3784,42 @@ true
 
 async function saveConfig() {
 	await validateConfig({ throwOnError: true });
-	const scope = currentScope();
-	await writeLines(files.targets, collectPaths());
-	await writeLines(files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]);
-	await writeLines(files.enableSyscallHooks, [$("#enableSyscallHooksInput").checked ? "1" : "0"]);
-	await writeLines(files.syscallHooks, [collectSyscallHooks().join(",")]);
-	await writeLines(files.autoSceneDebugfs, [$("#autoSceneDebugfsInput").checked ? "1" : "0"]);
-	await writeLines(files.scope, [scope]);
-	syncActiveUidText();
-	await writeLines(files.denyPackages, sortedPackageList("deny"));
-	await writeLines(files.allowPackages, sortedPackageList("allow"));
-	await writeLines(files.denyUids, linesFromText(uidTexts.deny || ""));
-	await writeLines(files.allowUids, linesFromText(uidTexts.allow || ""));
-	await writeLines(files.allowSystemUids, collectAllowSystemUids());
-	await writeLines(files.waitSeconds, [String(currentWaitSeconds())]);
+	await persistConfigFiles();
 	await refreshConfig();
 	statusText.textContent = t("已保存，重启后生效");
 	showToast(t("已保存，重启后生效"));
 }
 
-const WRITE_POLICY_LABELS = {
-	passthrough: t("跟随原厂"),
-	eacces: t("伪装不存在"),
-	enoent: t("旧版行为"),
+/*
+ * Keys, not pre-translated strings. A module-level `t()` call freezes
+ * each label in whatever language was active when app.js was parsed, so
+ * a user who switched to English still got a toast reading
+ * "Write policy switched to 跟随原厂". Translate at the point of use.
+ */
+const WRITE_POLICY_LABEL_KEYS = {
+	passthrough: "跟随原厂",
+	eacces: "伪装不存在",
+	enoent: "旧版行为",
 };
 
-// write_op_policy is an insmod parameter fed by service.sh from the
-// persistent conf, so switching it requires a full module reload. The
-// reload command below is intentionally kept in sync with reloadModule.
-async function applyWritePolicy() {
-	const checked = document.querySelector('input[name="writePolicy"]:checked');
-	const value = checked ? checked.value : "passthrough";
-	await writeLines(files.writeOpPolicy, [value]);
-	statusText.textContent = t("正在应用写入伪装策略...");
-	const output = await execShell(
-		`if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
-	);
-	setLogContent("kernel", output);
-	await refreshDiagnostics();
-	showToast(t(`写入伪装已切换为「{0}」`, [WRITE_POLICY_LABELS[value] || value]));
+function writePolicyLabel(value) {
+	const key = WRITE_POLICY_LABEL_KEYS[value];
+	return key ? t(key) : value;
 }
 
-async function reloadModule() {
-	await validateConfig({ throwOnError: true, requireModuleFile: true });
-	const scope = currentScope();
+/*
+ * Persist every conf the kernel reads at insmod time. saveConfig() and
+ * reloadModule() each held a byte-identical copy of this sequence, which
+ * is exactly how a newly added option ends up written by one path and
+ * silently dropped by the other.
+ */
+async function persistConfigFiles() {
 	await writeLines(files.targets, collectPaths());
 	await writeLines(files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]);
 	await writeLines(files.enableSyscallHooks, [$("#enableSyscallHooksInput").checked ? "1" : "0"]);
 	await writeLines(files.syscallHooks, [collectSyscallHooks().join(",")]);
 	await writeLines(files.autoSceneDebugfs, [$("#autoSceneDebugfsInput").checked ? "1" : "0"]);
-	await writeLines(files.scope, [scope]);
+	await writeLines(files.scope, [currentScope()]);
 	syncActiveUidText();
 	await writeLines(files.denyPackages, sortedPackageList("deny"));
 	await writeLines(files.allowPackages, sortedPackageList("allow"));
@@ -3500,10 +3827,45 @@ async function reloadModule() {
 	await writeLines(files.allowUids, linesFromText(uidTexts.allow || ""));
 	await writeLines(files.allowSystemUids, collectAllowSystemUids());
 	await writeLines(files.waitSeconds, [String(currentWaitSeconds())]);
+}
+
+/*
+ * Unload both modules and let service.sh load them back from the confs
+ * on disk. One shared definition because applyWritePolicy and
+ * reloadModule have to stay identical: write_op_policy is itself an
+ * insmod parameter, so switching it needs the same full reload as any
+ * other config change, and two copies of a string this long drift.
+ *
+ * The environment overrides are load-bearing. RESET_FAIL_GUARD clears
+ * the repeated-insmod-failure skip, so a user who just fixed a config is
+ * not blocked by the guard they tripped while it was broken;
+ * IGNORE_FAIL_GUARD stops the reload from re-tripping it; and
+ * INITIAL_DELAY_SECONDS=0 / WAIT_SECONDS=5 drop the boot-only settle
+ * delay and the 60s path-appearance budget, because Android is already
+ * running here and waiting that long would just look like a hung WebUI.
+ */
+function reloadCommand() {
+	return `if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`;
+}
+
+// write_op_policy is an insmod parameter fed by service.sh from the
+// persistent conf, so switching it requires a full module reload.
+async function applyWritePolicy() {
+	const checked = document.querySelector('input[name="writePolicy"]:checked');
+	const value = checked ? checked.value : "passthrough";
+	await writeLines(files.writeOpPolicy, [value]);
+	statusText.textContent = t("正在应用写入伪装策略...");
+	const output = await execShell(reloadCommand());
+	setLogContent("kernel", output);
+	await refreshDiagnostics();
+	showToast(t(`写入伪装已切换为「{0}」`, [writePolicyLabel(value)]));
+}
+
+async function reloadModule() {
+	await validateConfig({ throwOnError: true, requireModuleFile: true });
+	await persistConfigFiles();
 	statusText.textContent = t("正在热重载...");
-	const output = await execShell(
-		`if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
-	);
+	const output = await execShell(reloadCommand());
 	setLogContent("kernel", output);
 	await refreshDiagnostics();
 	const sceneState = lastSnapshot.sceneDebugfsState || {};
@@ -3657,17 +4019,18 @@ true
 
 	// logcat is a separate trip because on stricter ROMs it returns
 	// `Operation not permitted` -- we want to surface that distinctly
-	// from "no pathmask lines logged" instead of swallowing it.
+	// from "no pathmask lines logged" instead of swallowing it. The raw
+	// stderr is what gets stored; the wording is produced by
+	// scriptLogReasonText() at render time so it follows a language
+	// switch like every other report line.
 	const scriptProbe = await probeExec(`logcat -d -s pathmask nohello 2>&1 | tail -n 300`);
 	let scriptLog = "";
-	let scriptLogReason = "";
+	let scriptLogDetail = "";
 	if (scriptProbe.ok) {
 		scriptLog = scriptProbe.stdout || "";
 	} else {
 		scriptLog = "";
-		scriptLogReason = t("logcat 不可读（{0}）", [
-			scriptProbe.stderr || scriptProbe.error || `errno=${scriptProbe.errno}`,
-		]);
+		scriptLogDetail = scriptProbe.stderr || scriptProbe.error || `errno=${scriptProbe.errno}`;
 	}
 
 	const moduleProp = (firstLine(await safeExec(`grep '^version=' ${shellQuote(MODDIR + "/module.prop")} 2>/dev/null | head -n1`)) || "").replace(/^version=/, "");
@@ -3678,7 +4041,7 @@ true
 	lastSnapshot.statusLog = statusLog;
 	lastSnapshot.configLog = configLog;
 	lastSnapshot.scriptLog = scriptLog;
-	lastSnapshot.scriptLogReason = scriptLogReason;
+	lastSnapshot.scriptLogDetail = scriptLogDetail;
 	lastSnapshot.moduleProp = moduleProp;
 
 	const facts = await gatherDiagnosticFacts(lastSnapshot);
@@ -3686,14 +4049,11 @@ true
 
 	lastSnapshot.facts = facts;
 	lastSnapshot.verdict = verdict;
-	lastSnapshot.kernelLog = facts.dmesgState.available
-		? (facts.dmesgRaw || t("(dmesg 中没有 pathmask 相关行)"))
-		: t(`(dmesg 不可读：{0})`, [facts.dmesgState.reason]);
 
 	setLogContent("status", statusLog);
 	setLogContent("config", configLog);
-	setLogContent("script", scriptLog || t("({0})", [scriptLogReason || t("无 pathmask 相关 logcat")]));
-	setLogContent("kernel", lastSnapshot.kernelLog);
+	setLogContent("script", scriptLog || scriptLogFallbackText(scriptLogDetail));
+	setLogContent("kernel", kernelLogText(facts));
 	renderVerdictPanel(lastSnapshot);
 	lastReport = buildReport(lastSnapshot);
 	$("#reportOutput").value = lastReport;
@@ -3795,12 +4155,42 @@ async function selectHistory(path, liElem) {
 	$("#historyView").value = text || t("(空)");
 }
 
-function switchTab(tab) {
-	for (const button of $$(".tab")) {
-		button.classList.toggle("active", button.dataset.tab === tab);
+/*
+ * Tab switching. The buttons are role=tab in a role=tablist, so the ARIA
+ * state has to move with the visual state: aria-selected for screen
+ * readers, and a roving tabindex so the strip is one stop in the tab
+ * order with the arrow keys moving inside it. Without the roving part,
+ * keyboard users had to Tab through all five tabs to get past the
+ * header, and nothing announced which panel was open.
+ */
+function switchTab(tab, options = {}) {
+	const focus = options.focus !== false;
+	const buttons = $$(".tab");
+	let target = null;
+	for (const button of buttons) {
+		const active = button.dataset.tab === tab;
+		button.classList.toggle("active", active);
+		button.setAttribute("aria-selected", String(active));
+		button.tabIndex = active ? 0 : -1;
+		if (active) target = button;
 	}
 	for (const panel of $$(".tabPanel")) {
 		panel.classList.toggle("active", panel.id === `${tab}Panel`);
+	}
+	if (focus && target) target.focus();
+}
+
+// Sync ARIA from the classes the markup ships with, without moving
+// focus: this runs during page setup, and stealing focus on load would
+// drop a keyboard user into the middle of the page.
+function initTabs() {
+	for (const button of $$(".tab")) {
+		const active = button.classList.contains("active");
+		button.setAttribute("aria-selected", String(active));
+		button.tabIndex = active ? 0 : -1;
+	}
+	for (const button of $$(".logTab")) {
+		button.setAttribute("aria-pressed", String(button.classList.contains("active")));
 	}
 }
 
@@ -3808,21 +4198,48 @@ function switchLog(log) {
 	activeLog = log;
 	activeLogPage = 0;
 	for (const button of $$(".logTab")) {
-		button.classList.toggle("active", button.dataset.log === log);
+		const active = button.dataset.log === log;
+		button.classList.toggle("active", active);
+		button.setAttribute("aria-pressed", String(active));
 	}
 	renderLogPage();
 }
 
+/*
+ * Modal focus handling. `aria-modal="true"` tells a screen reader to
+ * ignore the page behind the dialog, but it does not stop Tab from
+ * leaving it, and focus used to fall back to <body> on close -- so the
+ * next Tab restarted at the top of the page instead of returning to the
+ * button that opened the dialog. Trap Tab inside the open modal and put
+ * focus back where it came from.
+ */
+const FOCUSABLE_SELECTOR = [
+	'a[href]',
+	'button:not([disabled])',
+	'input:not([disabled])',
+	'select:not([disabled])',
+	'textarea:not([disabled])',
+	'[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
+let modalRestoreFocus = null;
+
 function openModal(id) {
 	const modal = document.getElementById(id);
 	if (!modal) return;
+	modalRestoreFocus = document.activeElement;
 	modal.hidden = false;
 	// Defer the focus call so the dialog has actually rendered
 	// before we move focus into it; avoids a flash where the
 	// previously focused element keeps its outline.
 	setTimeout(() => {
-		const closeBtn = modal.querySelector("[data-modal-close]");
-		if (closeBtn) closeBtn.focus();
+		// Not querySelector("[data-modal-close]"): in every dialog here
+		// the first element carrying that attribute is the full-screen
+		// backdrop div, which is not focusable, so focus() on it was a
+		// no-op and the dialog opened with focus still behind it.
+		const focusable = [...modal.querySelectorAll(FOCUSABLE_SELECTOR)];
+		const target = focusable[0];
+		if (target) target.focus();
 	}, 0);
 }
 
@@ -3830,6 +4247,30 @@ function closeModal(id) {
 	const modal = document.getElementById(id);
 	if (!modal) return;
 	modal.hidden = true;
+	if (modalRestoreFocus && document.contains(modalRestoreFocus)) {
+		modalRestoreFocus.focus();
+	}
+	modalRestoreFocus = null;
+}
+
+function trapModalFocus(event) {
+	const open = $$(".modal").filter((modal) => !modal.hidden);
+	if (open.length === 0) return;
+	const modal = open[open.length - 1];
+	const focusable = [...modal.querySelectorAll(FOCUSABLE_SELECTOR)];
+	if (focusable.length === 0) return;
+	const first = focusable[0];
+	const last = focusable[focusable.length - 1];
+	const active = document.activeElement;
+	if (event.shiftKey) {
+		if (active === first || !modal.contains(active)) {
+			event.preventDefault();
+			last.focus();
+		}
+	} else if (active === last || !modal.contains(active)) {
+		event.preventDefault();
+		first.focus();
+	}
 }
 
 document.addEventListener("click", (event) => {
@@ -3840,11 +4281,31 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-	if (event.key !== "Escape") return;
-	for (const modal of $$(".modal")) {
-		if (!modal.hidden) closeModal(modal.id);
+	if (event.key === "Escape") {
+		for (const modal of $$(".modal")) {
+			if (!modal.hidden) closeModal(modal.id);
+		}
+		return;
 	}
+	if (event.key === "Tab") trapModalFocus(event);
 });
+
+// Arrow / Home / End move between tabs, the pattern the tablist role
+// advertises. Left and right are not swapped for RTL because the two
+// supported locales are both left-to-right.
+function handleTablistKeys(event, selector) {
+	const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+	if (!keys.includes(event.key)) return;
+	const buttons = $$(selector);
+	const index = buttons.indexOf(document.activeElement);
+	if (index < 0) return;
+	event.preventDefault();
+	let next;
+	if (event.key === "Home") next = 0;
+	else if (event.key === "End") next = buttons.length - 1;
+	else next = (index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+	return buttons[next];
+}
 
 $("#addPathBtn").addEventListener("click", () => addPathRow());
 $("#pathHelpBtn").addEventListener("click", () => openModal("pathHelpModal"));
@@ -3876,6 +4337,13 @@ for (const cb of document.querySelectorAll('#allowSystemUidsDetails input[data-a
 	cb.addEventListener("change", updateHealthList);
 }
 $("#searchInput").addEventListener("input", renderApps);
+// The 系统应用 toggle used to have no listener at all, so flipping it
+// did nothing until the user also pressed 加载 -- which reads as a
+// broken checkbox. Reload through the busy lock so it cannot overlap
+// another action.
+$("#showSystemInput").addEventListener("change", () => {
+	runAction(t("正在加载应用..."), loadApps).catch(() => {});
+});
 $("#saveBtn").addEventListener("click", () => runAction(t("正在保存..."), saveConfig).catch(() => {}));
 $("#pauseBtn").addEventListener("click", () => runAction(t("正在暂停隐藏..."), pauseHiding).catch(() => {}));
 $("#reloadBtn").addEventListener("click", () => runAction(t("正在热重载..."), reloadModule).catch(() => {}));
@@ -3895,11 +4363,33 @@ $("#nextLogBtn").addEventListener("click", () => {
 });
 
 for (const button of $$(".tab")) {
-	button.addEventListener("click", () => switchTab(button.dataset.tab));
+	// focus: false — a click has already put focus on the button, and
+	// calling focus() again would scroll the sticky header on some
+	// WebViews.
+	button.addEventListener("click", () => switchTab(button.dataset.tab, { focus: false }));
+}
+
+const tabGroup = $(".tabGroup");
+if (tabGroup) {
+	tabGroup.addEventListener("keydown", (event) => {
+		const next = handleTablistKeys(event, ".tab");
+		if (next) switchTab(next.dataset.tab);
+	});
 }
 
 for (const button of $$(".logTab")) {
 	button.addEventListener("click", () => switchLog(button.dataset.log));
+}
+
+const logTabs = $(".logTabs");
+if (logTabs) {
+	logTabs.addEventListener("keydown", (event) => {
+		const next = handleTablistKeys(event, ".logTab");
+		if (next) {
+			switchLog(next.dataset.log);
+			next.focus();
+		}
+	});
 }
 
 for (const radio of document.querySelectorAll('input[name="scope"]')) {
@@ -3925,6 +4415,10 @@ for (const button of $$(".langOption")) {
 	button.addEventListener("click", () => setUiLang(button.dataset.lang));
 }
 applyStaticText();
+initTabs();
+// After applyStaticText: the translated labels are what set the final
+// top bar and footer heights.
+observeChromeOffsets();
 
 try {
 	runAction(t("正在读取配置..."), refreshConfig).then(() => {

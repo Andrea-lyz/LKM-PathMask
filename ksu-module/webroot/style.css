@@ -18,8 +18,33 @@ body {
 body {
 	margin: 0;
 	min-height: 100vh;
-	padding-bottom: 92px;
+	/*
+	 * Both sticky offsets are measured by app.js (observeChromeOffsets)
+	 * and published as custom properties. The fallbacks are the real
+	 * defaults at 1x font scale rather than the previous guesses: the
+	 * old fixed 92px reserved more room than the 68px footer needs, and
+	 * the tabs' old `top: 67px` was ~6px short of the top bar's actual
+	 * height, so the tab row tucked under it -- and the gap widened
+	 * every time #statusText wrapped onto a second line.
+	 */
+	padding-bottom: calc(var(--actions-h, 68px) + 24px);
 	background: Canvas;
+}
+
+/*
+ * One visible focus ring for the whole page. The WebView default is
+ * easy to lose against the Highlight-coloured active tab and the
+ * tinted panel backgrounds, and keyboard / switch-access users had no
+ * other indicator of where focus was.
+ */
+:focus-visible {
+	outline: 2px solid Highlight;
+	outline-offset: 2px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+	accent-color: Highlight;
 }
 
 .topbar {
@@ -107,7 +132,7 @@ h2 {
 
 .tabs {
 	position: sticky;
-	top: 67px;
+	top: var(--topbar-h, 73px);
 	z-index: 18;
 	display: flex;
 	flex-wrap: wrap;
@@ -118,8 +143,24 @@ h2 {
 	border-bottom: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
 }
 
+/*
+ * The five tabs are wrapped so the tablist contains only tabs: the
+ * language switch has to stay on this row (see the .langSwitch comment
+ * below) but it is not a tab, and a non-tab child inside role=tablist
+ * breaks the semantics screen readers rely on. The wrapper takes over
+ * the flexible sizing the bare buttons used to do.
+ */
+.tabGroup {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: stretch;
+	gap: 6px;
+	min-width: 0;
+}
+
 .tab {
 	flex: 1 1 44px;
+	min-width: 0;
 	padding: 0 6px;
 }
 
@@ -448,6 +489,10 @@ button:active {
 	margin-bottom: 10px;
 }
 
+.appListCount {
+	margin-bottom: 8px;
+}
+
 .appList {
 	display: grid;
 	max-height: 340px;
@@ -475,8 +520,19 @@ button:active {
 }
 
 .pkg {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
 	overflow-wrap: anywhere;
 	font-size: 14px;
+}
+
+/* The manager's appLabel, when the native package API supplies one. */
+.pkgLabel {
+	color: color-mix(in srgb, CanvasText 58%, transparent);
+	font-size: 12px;
+	line-height: 1.3;
 }
 
 .uid {
@@ -569,6 +625,18 @@ button:active {
 	background: Highlight;
 	color: HighlightText;
 	border-color: Highlight;
+}
+
+/*
+ * Grid children default to min-width:auto, so a long label ("Save &
+ * reload" at a large system font scale) could not shrink and pushed the
+ * footer past its measured height, covering the last panel's controls.
+ * Letting the buttons shrink and wrap their labels keeps the row on one
+ * line and the measured --actions-h honest.
+ */
+.actions button {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 .toast {
@@ -891,13 +959,28 @@ button:active {
 	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
 }
 
-.historyItem:hover,
-.historyItem:focus {
+.historyItem:hover {
 	background: color-mix(in srgb, CanvasText 6%, transparent);
-	outline: none;
 }
 
+/*
+ * The previous rule was `.historyItem:hover, .historyItem:focus {
+ * outline: none }`. These items are keyboard operable (tabIndex=0 plus
+ * an Enter/Space handler), so suppressing the outline removed the only
+ * indication of which snapshot was focused. Keep the subtle hover wash
+ * but let the global :focus-visible ring through.
+ */
 .historyItem.active {
 	background: color-mix(in srgb, #2196f3 18%, Canvas);
 	border-color: color-mix(in srgb, #2196f3 50%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	button:active {
+		transform: none;
+	}
+
+	.subPanel summary::before {
+		transition: none;
+	}
 }
