@@ -200,6 +200,39 @@ test("config read populates every control from the stubbed device", async () => 
 	}
 });
 
+test("refresh does not leave focus in a path input", async () => {
+	const page = await bootReady(await bootPage());
+	try {
+		// 刷新 rebuilds every path row from disk. addPathRow() used to
+		// focus its new input unconditionally, so the last row's text
+		// field kept focus -- and on an Android WebView a
+		// programmatically focused text input raises the soft keyboard,
+		// which is the IME popping open over the hidden-path list.
+		page.$("#refreshBtn").click();
+		await waitFor(page, () => page.pm().busy === false, "refresh to finish");
+		await sleep(20);
+		assertEqual(page.$$("#pathList .pathRow").length, 3, "rows rebuilt from the conf");
+
+		const active = page.document.activeElement;
+		assert(!(active && active.closest && active.closest("#pathList")),
+			`focus must not land inside the path list, got <${active && active.tagName}>`);
+		assert(!(active instanceof page.window.HTMLInputElement && active.type === "text"),
+			`focus must not land on any text input, that is what raises the IME; got <${active && active.tagName} id=${active && active.id}>`);
+
+		// 添加 must still put the caret in the new empty field.
+		const before = page.$$("#pathList .pathRow").length;
+		page.$("#addPathBtn").click();
+		await sleep(10);
+		assertEqual(page.$$("#pathList .pathRow").length, before + 1, "添加 appends a row");
+		const added = page.$$("#pathList .pathRow")[before];
+		assertEqual(page.document.activeElement, added.querySelector('input[type="text"]'),
+			"添加 still focuses the new path field");
+	} finally {
+		await settle(page);
+		page.close();
+	}
+});
+
 test("tabs expose tablist semantics and respond to arrow keys", async () => {
 	const page = await bootReady(await bootPage());
 	try {

@@ -78,6 +78,18 @@ most likely to fire, and the failure it exists to report is the one that then
 stays invisible. Replaced with `trapText()`, which degrades to the Chinese
 source.
 
+## Found after the initial pass
+
+**25. 刷新 on the Mask tab popped the IME over the hidden-path list.**
+`addPathRow()` ended with an unconditional `input.focus()`. That is right for
+添加, where the caret should be waiting in the new empty field, but
+`renderPaths()` calls `addPathRow()` once per configured path on every config
+read, so each row stole focus in turn and the last path input kept it. On an
+Android WebView a programmatically focused `<input type="text">` raises the soft
+keyboard — hence 刷新 opening the IME on the last 隐藏路径 field. The same rebuild
+runs on page load and after 保存配置 / 恢复默认配置 / toggling procguard, so all of
+those were affected. Focus is now opt-in and only 添加 asks for it.
+
 ## Severity 2 — layout that does not match the rendered page
 
 **10. The sticky tab offset was a guess that was already wrong.** `.tabs` used
@@ -207,19 +219,20 @@ of the file — which is how the first version of this test silently saw 20 call
 sites instead of 339.
 
 `smoke.test.mjs` boots the real `index.html` and the real `app.js` in jsdom
-against a stubbed `window.ksu` and drives the UI: 14 checks covering boot,
-config population, tab and arrow-key semantics, the native and shell app-list
-paths, in-place toggling, search, modal focus, language switching, the
-write-policy toast, and the exec watchdog.
+against a stubbed `window.ksu` and drives the UI: 15 checks covering boot,
+config population, focus after a refresh, tab and arrow-key semantics, the
+native and shell app-list paths, in-place toggling, search, modal focus,
+language switching, the write-policy toast, and the exec watchdog.
 
 Both suites were run against the **original** files to confirm they are
-regression guards rather than tautologies. 11 of 14 checks fail there for the
+regression guards rather than tautologies. 12 of 15 checks fail there for the
 right reasons — including `Write policy switched to 伪装不存在` for **6**, a
-rebuilt row node for **5**, focus staying behind the dialog for **2**, and
-`checked=true` against a hand-edited `off` for **7**. The three that pass on
-both (boot, config population, `pm` fallback) are the baseline that proves the
-harness itself is sound. The dead-key check was separately confirmed
-non-vacuous by injecting a key that appears nowhere else.
+rebuilt row node for **5**, focus landing on a path `<INPUT>` for **25**, focus
+staying behind the dialog for **2**, and `checked=true` against a hand-edited
+`off` for **7**. The three that pass on both (boot, config population, `pm`
+fallback) are the baseline that proves the harness itself is sound. The
+dead-key check was separately confirmed non-vacuous by injecting a key that
+appears nowhere else.
 
 ## Deliberately not changed
 

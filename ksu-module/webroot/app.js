@@ -1416,6 +1416,7 @@ function renderPaths(paths) {
 	for (const path of list) addPathRow(path);
 }
 
+
 // A target_path.conf line is one of:
 //   - literal:                `/system_ext/app/SoterService`
 //   - glob (any segment):     `/dev/???/scene_mode_category`
@@ -1454,7 +1455,7 @@ function joinTargetLine(path, useParent, group) {
 	return out;
 }
 
-function addPathRow(value = "") {
+function addPathRow(value = "", options = {}) {
 	const { useParent, path, group } = splitTargetLine(value);
 
 	const row = document.createElement("div");
@@ -1483,7 +1484,17 @@ function addPathRow(value = "") {
 	row.append(input, groupInput, dirToggle, remove);
 	applyPathRowText(row);
 	pathList.append(row);
-	input.focus();
+	/*
+	 * Opt-in rather than the default. 添加 wants the caret waiting in the
+	 * new empty field, but renderPaths() rebuilds every row from disk on
+	 * each config read and used to focus each one in turn -- so the last
+	 * path input kept focus. On an Android WebView a programmatically
+	 * focused text input raises the soft keyboard, which is why pressing
+	 * 刷新 on the Mask tab popped the IME over the hidden-path list.
+	 * The same rebuild runs on page load and after 保存配置 / 恢复默认配置
+	 * / toggling procguard, so all of those were affected too.
+	 */
+	if (options.focus) input.focus();
 }
 
 /*
@@ -4307,7 +4318,7 @@ function handleTablistKeys(event, selector) {
 	return buttons[next];
 }
 
-$("#addPathBtn").addEventListener("click", () => addPathRow());
+$("#addPathBtn").addEventListener("click", () => addPathRow("", { focus: true }));
 $("#pathHelpBtn").addEventListener("click", () => openModal("pathHelpModal"));
 $("#donateBtn").addEventListener("click", () => openModal("donateModal"));
 $("#historyBtn").addEventListener("click", () => runAction(t("正在加载历史诊断..."), openHistoryModal).catch(() => {}));
