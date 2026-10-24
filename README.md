@@ -108,6 +108,22 @@ android17-6.18_pathmask-ksu.zip
 Non-tag builds are uploaded to the `pathmask-latest` release. Tag builds are
 uploaded to the matching version release.
 
+`webui.yml` verifies `ksu-module/webroot` and is called by `build-lkm.yml` as a
+release gate, so a WebUI regression blocks the module zips as well. It parses
+`app.js`, checks that every string reaching `t()` has an `EN_TEXT` entry and
+that no entry is dead, and boots the real `index.html` and `app.js` in jsdom
+against a stubbed `window.ksu` to drive the UI headlessly:
+
+```sh
+cd tools/tests/webui
+npm ci
+npm test
+```
+
+The smoke test needs no device and no kernel build. Both suites are worth
+running against unchanged sources when touching them, to confirm a new check
+fails for the right reason.
+
 Install the `*_pathmask-ksu.zip` file that matches your device KMI. The raw
 `.ko` is also uploaded for manual testing.
 
