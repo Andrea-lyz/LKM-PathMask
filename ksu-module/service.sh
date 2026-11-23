@@ -375,7 +375,11 @@ init_persistent_config() {
 	seed_config_file "$WRITE_OP_POLICY_CONFIG" "$MOD_WRITE_OP_POLICY_CONFIG" "passthrough"
 	seed_config_file "$AUTO_SCENE_DEBUGFS_CONFIG" "$MOD_AUTO_SCENE_DEBUGFS_CONFIG" "0"
 	seed_config_file "$PROC_GUARD_CONFIG" "$MOD_PROC_GUARD_CONFIG" "0"
-	seed_config_file "$APP_PROFILES_CONFIG" "$MOD_APP_PROFILES_CONFIG" ""
+	# Don't change the config's existence while an explicit apply is staging
+	# its first ruleset. The WebUI owns the final atomic rename in that case.
+	if [ -z "${PATHMASK_PROFILE_REQUEST:-}" ]; then
+		seed_config_file "$APP_PROFILES_CONFIG" "$MOD_APP_PROFILES_CONFIG" ""
+	fi
 
 	# Existing installs from v2.2.8 - v2.3.1 shipped enable_syscall_hooks=0
 	# as a defensive default (Holmes 04 mitigation pre-bisect). Now that the
