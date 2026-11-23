@@ -239,15 +239,32 @@ export function createKsuStub(options = {}) {
 	};
 
 	if (!options.withoutNativePackages) {
+		// The real methods are Android @JavascriptInterface methods, which
+		// can only take and return primitives: both return a JSON string,
+		// and getPackagesInfo takes its package list as a JSON string. The
+		// `kernelsu` npm wrapper hides this with JSON.parse / JSON.stringify
+		// (see its index.js); a page talking to raw window.ksu must do the
+		// same. Returning real arrays here would let a page that skips the
+		// (de)serialisation pass in jsdom and silently fall back on a device.
 		ksu.listPackages = (type) => {
 			const key = type === "all" ? null : type;
 			const all = PACKAGES.user.concat(PACKAGES.system);
-			return (key ? PACKAGES[key] || [] : all).map((p) => p.packageName);
+			return JSON.stringify((key ? PACKAGES[key] || [] : all).map((p) => p.packageName));
 		};
-		ksu.getPackagesInfo = (names) => {
+		ksu.getPackagesInfo = (packagesJson) => {
+			// A non-string reaches Java coerced via toString(), which for an
+			// array is "a,b,c" -- not JSON -- so model that as the bridge
+			// answering with nothing usable.
+			if (typeof packagesJson !== "string") return "[]";
+			let names;
+			try {
+				names = JSON.parse(packagesJson);
+			} catch (error) {
+				return "[]";
+			}
 			const all = PACKAGES.user.concat(PACKAGES.system);
-			const wanted = new Set(names);
-			return all.filter((p) => wanted.has(p.packageName));
+			const wanted = new Set(Array.isArray(names) ? names : []);
+			return JSON.stringify(all.filter((p) => wanted.has(p.packageName)));
 		};
 	}
 

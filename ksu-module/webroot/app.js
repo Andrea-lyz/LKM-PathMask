@@ -1111,7 +1111,15 @@ function execShell(command, options = {}) {
 
 		timer = setTimeout(() => {
 			timer = 0;
-			delete window[callbackName];
+			// Leave a self-removing no-op rather than deleting the
+			// global: the abandoned command is still running in the root
+			// shell, and when it finally finishes the manager evaluates
+			// `callbackName(...)` in the page. A missing global there is a
+			// ReferenceError that the error traps above would paint into
+			// #statusText long after the user has moved on.
+			window[callbackName] = () => {
+				delete window[callbackName];
+			};
 			const err = new Error(t("命令超时（{0} 秒），已放弃等待", [Math.round(timeoutMs / 1000)]));
 			err.timeout = true;
 			reject(err);
@@ -1300,6 +1308,18 @@ function parseBoolish(text, fallback = false) {
 	if (v === "1" || v === "true" || v === "yes" || v === "on" || v === "y") return true;
 	if (v === "0" || v === "false" || v === "no" || v === "off" || v === "n") return false;
 	return fallback;
+}
+
+// Mirror of service.sh's hide_dirents normalisation, verbatim: it takes
+// `head -n 1 | tr -d '\r'` and matches `0|false|False|no|No` (case
+// sensitive, no trimming) as off and everything else -- including a
+// missing or empty file -- as on. Keep the two in lockstep; if service.sh
+// ever widens its case, widen this set with it.
+const HIDE_DIRENTS_OFF = new Set(["0", "false", "False", "no", "No"]);
+
+function parseHideDirents(text) {
+	const line = String(text || "").split("\n")[0].replace(/\r/g, "");
+	return !HIDE_DIRENTS_OFF.has(line);
 }
 
 // Decode the contents of /data/adb/pathmask/syscall_hooks.conf into
@@ -1656,13 +1676,32 @@ function updateAppListCount(matched = 0, shown = 0) {
  * devices costs seconds and is the usual reason 加载 looks like it hung.
  *
  * Older managers only inject exec, so the shell path stays as fallback.
+ *
+ * These are raw @JavascriptInterface methods, not the `kernelsu` npm
+ * wrapper: Java can only hand primitives across, so listPackages returns
+ * a JSON string and getPackagesInfo both takes and returns one. The npm
+ * package does exactly this JSON.parse / JSON.stringify dance. Passing a
+ * JS array straight through would reach Java as "a,b,c" and a string
+ * result would never pass Array.isArray, silently forcing the pm path on
+ * every real device.
  */
+function parseBridgeJson(value) {
+	if (Array.isArray(value)) return value;
+	if (typeof value !== "string" || value === "") return null;
+	try {
+		const parsed = JSON.parse(value);
+		return Array.isArray(parsed) ? parsed : null;
+	} catch (error) {
+		return null;
+	}
+}
+
 function loadAppsFromNativeBridge(bridge) {
 	const showSystem = $("#showSystemInput").checked;
-	const names = bridge.listPackages(showSystem ? "all" : "user");
-	if (!Array.isArray(names) || names.length === 0) return null;
-	const infos = bridge.getPackagesInfo(names);
-	if (!Array.isArray(infos) || infos.length === 0) return null;
+	const names = parseBridgeJson(bridge.listPackages(showSystem ? "all" : "user"));
+	if (!names || names.length === 0) return null;
+	const infos = parseBridgeJson(bridge.getPackagesInfo(JSON.stringify(names)));
+	if (!infos || infos.length === 0) return null;
 	return infos
 		.filter((info) => info && info.packageName)
 		.map((info) => ({
@@ -3295,11 +3334,12 @@ async function refreshConfig() {
 	const nowText = await safeExec(`date +%s 2>/dev/null || echo 0`);
 
 	renderPaths(linesFromText(targetText));
-	// parseBoolish, not a string compare: service.sh accepts the same
-	// human-friendly spellings for this flag, and the old
-	// `(hideText.trim() || "1") !== "0"` read a hand-edited "off" or
-	// "no" as enabled while every other boolean on the page disagreed.
-	$("#hideDirentsInput").checked = parseBoolish(hideText, true);
+	// Not parseBoolish: the toggle has to show what the kernel will be
+	// loaded with, and service.sh normalises this flag with its own,
+	// narrower case (0|false|False|no|No -> 0, anything else -> 1). A
+	// hand-edited "off" therefore still loads with hide_dirents=1, and a
+	// toggle that read it as disabled would hide that from the user.
+	$("#hideDirentsInput").checked = parseHideDirents(hideText);
 	$("#enableSyscallHooksInput").checked = parseBoolish(enableSyscallHooksText, true);
 	$("#autoSceneDebugfsInput").checked = parseBoolish(autoSceneDebugfsText, DEFAULT_AUTO_SCENE_DEBUGFS);
 	applySyscallHooksToCheckboxes(syscallHooksText);
@@ -4352,7 +4392,15 @@ $("#searchInput").addEventListener("input", renderApps);
 // did nothing until the user also pressed 加载 -- which reads as a
 // broken checkbox. Reload through the busy lock so it cannot overlap
 // another action.
-$("#showSystemInput").addEventListener("change", () => {
+$("#showSystemInput").addEventListener("change", (event) => {
+	// runAction() only toasts when busy, but the checkbox has already
+	// flipped by then: undo it so the box never claims a filter the
+	// list on screen was not loaded with.
+	if (busy) {
+		event.target.checked = !event.target.checked;
+		showToast(t("正在处理，请稍等"));
+		return;
+	}
 	runAction(t("正在加载应用..."), loadApps).catch(() => {});
 });
 $("#saveBtn").addEventListener("click", () => runAction(t("正在保存..."), saveConfig).catch(() => {}));

@@ -90,6 +90,7 @@ async function bootPage(options = {}) {
 		uiLang: () => uiLang, apps: () => apps, busy: () => busy,
 		lastSnapshot: () => lastSnapshot, EXEC_TIMEOUT_MS: () => EXEC_TIMEOUT_MS,
 		t: () => t, EN_TEXT: () => EN_TEXT, parseBoolish: () => parseBoolish,
+		parseHideDirents: () => parseHideDirents,
 	};
 	const out = {};
 	for (const k of Object.keys(defs)) {
@@ -475,6 +476,16 @@ test("an unanswered exec times out, releases the busy lock, and recovers", async
 		}
 		assertEqual(page.stub.pending.length, 1, "exactly one command was left unanswered");
 
+		// The abandoned command finishes late. The manager calls the
+		// callback by name; that must land on a no-op, not raise a
+		// ReferenceError that the error trap paints into #statusText.
+		const late = page.stub.pending[0];
+		assertEqual(typeof page.window[late], "function", "a late callback still has somewhere to land");
+		const statusBefore = page.$("#statusText").textContent;
+		page.window[late](0, "late output", "");
+		assertEqual(page.window[late], undefined, "the no-op removes itself once called");
+		assertEqual(page.$("#statusText").textContent, statusBefore, "a late answer must not touch the status line");
+
 		// Unwedge: the same button must now complete normally.
 		page.stub.state.swallow = null;
 		page.$("#toast").hidden = true;
@@ -502,24 +513,58 @@ test("the app list falls back to pm when the native API is absent", async () => 
 	}
 });
 
-test("hide_dirents accepts the same spellings service.sh does", async () => {
-	// parseBoolish is what every other boolean conf goes through; the old
-	// `(hideText.trim() || "1") !== "0"` read a hand-edited "off" or "no"
-	// as enabled while the kernel and service.sh read it as disabled, so
-	// the toggle disagreed with the module it was supposed to show.
+test("hide_dirents shows what service.sh will load the kernel with", async () => {
+	// service.sh normalises this flag with `case 0|false|False|no|No) -> 0;
+	// *) -> 1`. That is narrower than parseBoolish: "off" still loads with
+	// hide_dirents=1. The toggle must show the value the kernel receives,
+	// so it follows service.sh rather than the page's generic parser.
+	const cases = [
+		["0", false], ["false", false], ["False", false], ["no", false], ["No", false],
+		["0\r\n", false], ["no\nignored", false],
+		["1", true], ["", true], ["off", true], ["OFF", true], ["n", true], ["NO", true],
+	];
 	const page = await bootReady(await bootPage({
 		stub: { conf: { "/data/adb/pathmask/hide_dirents.conf": "off" } },
 	}));
 	try {
-		const { parseBoolish } = page.pm();
-		assertEqual(parseBoolish("off", true), false, "'off' means disabled");
-		assertEqual(parseBoolish("no", true), false, "'no' means disabled");
-		assertEqual(parseBoolish("false", true), false, "'false' means disabled");
-		assertEqual(parseBoolish("", true), true, "empty falls back to the default");
-		assertEqual(parseBoolish("yes", false), true, "'yes' means enabled");
-		assertEqual(parseBoolish("1\n", false), true, "trailing newline tolerated");
-		assertEqual(page.$("#hideDirentsInput").checked, false,
-			"the toggle must follow a hand-edited 'off', matching what service.sh does");
+		const { parseHideDirents } = page.pm();
+		for (const [text, expected] of cases) {
+			assertEqual(parseHideDirents(text), expected, `service.sh reads ${JSON.stringify(text)} as ${expected ? 1 : 0}`);
+		}
+		assertEqual(page.$("#hideDirentsInput").checked, true,
+			"a hand-edited 'off' still loads with hide_dirents=1, so the toggle must stay on");
+	} finally {
+		await settle(page);
+		page.close();
+	}
+	const offPage = await bootReady(await bootPage({
+		stub: { conf: { "/data/adb/pathmask/hide_dirents.conf": "no" } },
+	}));
+	try {
+		assertEqual(offPage.$("#hideDirentsInput").checked, false, "'no' is off in service.sh and in the toggle");
+	} finally {
+		await settle(offPage);
+		offPage.close();
+	}
+});
+
+test("the system-apps toggle snaps back when another action is running", async () => {
+	// runAction() only toasts while busy, but by then the checkbox has
+	// already flipped -- leaving it claiming a filter the list was not
+	// loaded with.
+	const page = await bootReady(await bootPage({ execTimeoutMs: 400 }));
+	try {
+		// Wedge only after boot, so the refresh below holds the lock.
+		page.stub.state.swallow = "cat '/data/adb/pathmask/target_path.conf'";
+		const toggle = page.$("#showSystemInput");
+		const before = toggle.checked;
+		page.$("#refreshBtn").click();
+		await waitFor(page, () => page.pm().busy === true, "the refresh to hold the busy lock");
+		const callsBefore = page.stub.calls.length;
+		toggle.click();
+		assertEqual(toggle.checked, before, "the toggle must not change while busy");
+		assert(!page.stub.calls.slice(callsBefore).some((c) => c.includes("pm list packages")),
+			"no app load while busy");
 	} finally {
 		await settle(page);
 		page.close();
