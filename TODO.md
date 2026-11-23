@@ -20,30 +20,16 @@ Follow-up ideas:
 
 ## Per-app rules
 
-Status: implemented; kernel side still needs a DDK build and a device run.
-
-Current behavior:
-
-- `app_profiles.conf` holds one profile per (Android user, package): an enable
-  switch, a directory-listing switch and its own path list.
-- The kernel target table gained an owner UID per entry. A legacy target keeps
-  the `scope_mode` / `deny_uids` gate; a per-app target is hidden only from
-  that exact UID (real, effective or filesystem), so two apps can carry
-  different paths in one module instance.
-- Rules reach the kernel after insmod through
-  `/sys/module/pathmask/parameters/app_profiles`; each write appends entries,
-  `-` clears the per-app ones. This avoids the kernel command-line size limit
-  and lets `service.sh` chunk a long ruleset.
-- `profile_mode=1` lets the module load with no legacy `target_paths`, and
-  never falls back to the legacy single-path default in that case.
-- The WebUI writes the ruleset only when the user presses 应用到模块 twice; the
-  legacy files are never rewritten by that action.
-
-Known limits:
-
-- Per-app rules cover the app's own UID, not its isolated processes.
-- Only paths the boot script can resolve for the listed Android user apply;
-  unresolved packages are logged and skipped.
+- WebUI merges confirmed edits by Android user and package, preserving other
+  on-disk profiles. Persistence is gated on a matching kernel receipt.
+- The compiler rejects malformed or ambiguous configurations before staging.
+  Resolving one profile never changes the legacy scope.
+- The kernel stages a complete candidate, then replaces the immutable per-app
+  table in one RCU publication. Non-targeted process lookups skip path copies
+  and target scans. Directory matches include the filesystem device.
+- Unverified identities, including isolated and app-zygote processes, are not
+  eligible for per-app activation. No changes to device runtime were verified
+  in the host-side regression tests.
 
 ## Scoped hiding / blacklist / whitelist
 

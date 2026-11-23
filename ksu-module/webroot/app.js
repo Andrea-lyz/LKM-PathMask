@@ -188,12 +188,21 @@ const EN_TEXT = {
 	"应用到模块": "Apply to module",
 	"再点一次「应用到模块」确认；规则会写入模块并热重载。": "Click \"Apply to module\" again to confirm; the rules are written and the module is reloaded.",
 	"正在应用逐应用规则...": "Applying per-app rules...",
-	"已应用 {0} 个应用；{1} 个应用无法确定 Android 用户，未写入。": "Applied {0} app profile(s); {1} app(s) had no resolvable Android user and were skipped.",
-	"已写入并热重载 {0} 个应用规则。": "Wrote and hot-reloaded {0} app profile(s).",
 	"应用失败：{0}": "Applying failed: {0}",
+	"无法读取模块已有规则，不能应用草稿。可刷新后重试。": "Unable to read the module configuration. Drafts cannot be applied. Refresh to retry.",
+	"没有可应用的草稿；无法确定 Android 用户的草稿未写入。": "No applicable drafts. Drafts without an Android user were not written.",
+	"已确认 {0} 条逐应用路径；{1} 个草稿的 Android 用户未知，未写入。": "The kernel confirmed {0} per-app paths. {1} drafts with an unknown Android user were not written.",
+	"内核已确认 {0} 条逐应用路径，配置已保存。": "The kernel confirmed {0} per-app paths and the configuration was saved.",
+	"模块已有规则": "Module profile",
+	"无法校验现有逐应用配置，未覆盖文件。": "The existing per-app configuration could not be verified. No file was overwritten.",
+	"同一应用的配置已被修改，请备份草稿并重新打开 WebUI。": "This app profile has been changed. Back up the drafts and reopen WebUI.",
+	"合并后的规则无效或超过上限。": "The merged profiles are invalid or exceed the limit.",
+	"无法创建规则暂存文件。": "Unable to create a staging file for the profiles.",
+	"没有收到内核生效确认。": "No confirmation was received from the kernel.",
+	"请输入不超过 255 字节、且不含逗号或分号的非根绝对路径。": "Enter a non-root absolute path of at most 255 bytes without commas or semicolons.",
 	"已安装应用": "Installed apps",
 	"旧版规则": "Legacy rules",
-	"旧版共享路径规则仍在使用。逐应用设置仅保存为草稿。": "Legacy shared paths remain in use. Per-app settings are drafts only.",
+	"应用草稿前会合并模块已有规则，保留没有修改的应用。": "Applying drafts merges them with the module configuration, preserving other apps.",
 	"搜索名称、包名或 UID": "Search by name, package, or UID",
 	"包含系统应用": "Include system apps",
 	"显示更多": "Show more",
@@ -212,7 +221,6 @@ const EN_TEXT = {
 	"没有匹配的应用": "No matching apps",
 	"已显示 {0} 个，共匹配 {1} 个应用": "Showing {0} of {1} matching apps",
 	"这条路径已经添加。": "That path has already been added.",
-	"请输入非根目录的绝对路径。": "Enter an absolute path other than the root directory.",
 	"草稿有未保存的更改": "The draft has unsaved changes",
 	"已保存草稿（未应用）": "Draft saved (not applied)",
 	"草稿备份与升级兼容": "Draft backups and upgrade compatibility",
@@ -1243,7 +1251,7 @@ async function runAction(message, action) {
 
 	setBusy(true, message);
 	try {
-		await action();
+		return await action();
 	} catch (error) {
 		showToast(error.message);
 		throw error;
@@ -3962,7 +3970,7 @@ async function persistConfigFiles() {
  * running here and waiting that long would just look like a hung WebUI.
  */
 function reloadCommand() {
-	return `if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`;
+	return `if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; rc=$?; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30; exit "$rc"`;
 }
 
 // write_op_policy is an insmod parameter fed by service.sh from the
@@ -4563,23 +4571,110 @@ observeChromeOffsets();
 const glassDock = window.PathMaskGlass?.mountDock($("#mainDock"));
 window.PathMaskGlass?.mountSurface($(".topbar"), "liquid-glass-topbar");
 window.PathMaskGlass?.mountSurface($(".actions"), "liquid-glass-actions");
+// Read the checked bytes and fingerprint from the same snapshot. Neither a
+// broken read nor a malformed on-disk ruleset is treated as an empty one.
+function appProfileSnapshotShell() {
+	return `cfg=${shellQuote(files.appProfiles)}
+profile_snapshot() {
+	if [ ! -e "$cfg" ] && [ ! -L "$cfg" ]; then
+		fingerprint=missing
+		encoded=''
+		return 0
+	fi
+	[ -f "$cfg" ] && [ ! -L "$cfg" ] || return 1
+	size=$(wc -c < "$cfg") && [ "$size" -le 131072 ] || return 1
+	encoded=$(base64 < "$cfg") || return 1
+	checksum=$(printf '%s' "$encoded" | sha256sum) || return 1
+	fingerprint="\${checksum%% *}"
+}`;
+}
+
+async function readAppProfileConfig() {
+	const output = await execShell(`${appProfileSnapshotShell()}
+profile_snapshot || exit 22
+printf '%s\n%s' "$fingerprint" "$encoded"`);
+	const match = /^(missing|[a-f0-9]{64})(?:\r?\n([\s\S]*))?$/.exec(output);
+	const codec = window.PathMaskProfileDrafts;
+	if (match && codec) {
+		try {
+			const bytes = Uint8Array.from(atob(match[2] || ""), ch => ch.charCodeAt(0));
+			const profiles = codec.decodeRules(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+			if (profiles) return { fingerprint: match[1], profiles };
+		} catch (_) {
+			// Invalid encoding is not safe to replace with a newly saved file.
+		}
+	}
+	throw new Error(t("无法校验现有逐应用配置，未覆盖文件。"));
+}
+
+async function applyAppProfileChanges(changes, baseline) {
+	if (busy) throw new Error(t("正在处理，请稍等"));
+	return runAction(t("正在应用逐应用规则..."), async () => {
+		const { fingerprint, profiles } = await readAppProfileConfig();
+		for (const [key, value] of changes) {
+			if (JSON.stringify(profiles.get(key)) !== JSON.stringify(baseline.get(key)))
+				throw new Error(t("同一应用的配置已被修改，请备份草稿并重新打开 WebUI。"));
+			profiles.set(key, value);
+		}
+		const result = window.PathMaskProfileDrafts.encodeRules(profiles);
+		if (!result) throw new Error(t("合并后的规则无效或超过上限。"));
+
+		const prefix = CONFIGDIR + "/.profile-write.";
+		const work = (await execShell(`umask 077; mkdir -p ${shellQuote(CONFIGDIR)} && mktemp -d ${shellQuote(prefix + "XXXXXX")}`)).trim();
+		if (!work.startsWith(prefix) || !/^[a-zA-Z0-9]{6}$/.test(work.slice(prefix.length)))
+			throw new Error(t("无法创建规则暂存文件。"));
+		const candidate = work + "/candidate";
+		const cleanup = `rm -f ${shellQuote(candidate)}; rmdir ${shellQuote(work)} 2>/dev/null`;
+		let handedOff = false;
+		try {
+			await execShell(`umask 077; : > ${shellQuote(candidate)}`);
+			// Keep command strings below the bridge and Android argv limits.
+			const lines = result.text.match(/[^\n]*\n/g) || [];
+			for (let i = 0; i < lines.length; i += 24) {
+				const chunk = lines.slice(i, i + 24).join("");
+				await execShell(`printf '%s' ${shellQuote(chunk)} >> ${shellQuote(candidate)}`);
+			}
+			// After handoff the shell owns cleanup even if the bridge times out.
+			handedOff = true;
+			const output = await execShell(`${appProfileSnapshotShell()}
+lock=${shellQuote(CONFIGDIR + "/.profile-apply-lock")}
+owned=0
+finish() {
+	${cleanup} || true
+	if [ "$owned" = 1 ]; then rmdir "$lock" 2>/dev/null || true; fi
+}
+trap finish EXIT
+mkdir "$lock" || exit 23
+owned=1
+expected=${shellQuote(fingerprint)}
+profile_snapshot && [ "$fingerprint" = "$expected" ] || exit 24
+candidate=${shellQuote(candidate)}
+sh ${shellQuote(files.service)} --check-app-profiles "$candidate" || exit 25
+request="$(date +%s)$$"
+export PATHMASK_PROFILE_REQUEST="$request" PATHMASK_APP_PROFILES_STAGE="$candidate"
+output=$(${reloadCommand()}) || { printf '%s\n' "$output" >&2; exit 26; }
+printf '%s\n' "$output" | grep -Fxq "PATHMASK_APP_PROFILES_OK $request ${result.pathCount}" || exit 27
+profile_snapshot && [ "$fingerprint" = "$expected" ] || exit 24
+mv "$candidate" "$cfg" || exit 28
+printf '%s\n' "$output"`);
+			if (!new RegExp("^PATHMASK_APP_PROFILES_OK [0-9]+ " + result.pathCount + "$", "m").test(output))
+				throw new Error(t("没有收到内核生效确认。"));
+			setLogContent("kernel", output);
+			return { profiles, pathCount: result.pathCount };
+		} finally {
+			if (!handedOff) await execShell(cleanup).catch(() => {});
+		}
+	});
+}
+
 const appDirectory = window.PathMaskAppDirectory?.mount({
 	t,
 	readApps: readInstalledApps,
 	matches: appMatchesQuery,
 	getLegacySnapshot: () => lastSnapshot,
 	navigate: tab => switchTab(tab, { focus: false }),
-	/*
-	 * Installing per-app rules is a real device change: write the ruleset the
-	 * boot script compiles, then reload through the same path as 保存并热重载.
-	 * An empty ruleset is a valid write and clears every per-app rule.
-	 */
-	applyProfiles: text => runAction(t("正在应用逐应用规则..."), async () => {
-		await writeLines(files.appProfiles, text ? text.split("\n") : []);
-		const output = await execShell(reloadCommand());
-		setLogContent("kernel", output);
-		await refreshDiagnostics();
-	}),
+	readProfiles: async () => (await readAppProfileConfig()).profiles,
+	applyProfiles: applyAppProfileChanges,
 });
 if (!appDirectory) {
 	// A stale or missing optional WebUI asset must not lock users out of legacy rules.

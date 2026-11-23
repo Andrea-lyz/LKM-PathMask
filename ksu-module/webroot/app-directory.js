@@ -36,10 +36,10 @@
 	const equal = (a, b) => a.enabled === b.enabled && a.filterDirectory === b.filterDirectory
 		&& a.paths.length === b.paths.length && a.paths.every((path, i) => path === b.paths[i]);
 
-	function mount({ t, readApps, matches, navigate, getLegacySnapshot, applyProfiles }) {
+	function mount({ t, readApps, matches, navigate, getLegacySnapshot, readProfiles, applyProfiles }) {
 		const by = id => document.getElementById(id);
 		const codec = window.PathMaskProfileDrafts;
-		if (!codec || !by("appDraftBackupInput")) return null;
+		if (!codec?.decodeRules || !by("appDraftBackupInput") || !by("applyProfilesBtn")) return null;
 		const draftKey = codec.appKey;
 		const list = by("directoryList"), status = by("directoryStatus"), search = by("directorySearch");
 		const includeSystem = by("directorySystemInput"), more = by("directoryMoreBtn");
@@ -52,45 +52,73 @@
 		let state = "idle", entries = [], request = 0, limit = pageSize;
 		let current = null, selectedKey = null, previousScroll = 0, pathError = "";
 		const applyState = by("profileApplyState");
-		// The applied ruleset, not the draft store: only enabled profiles with
-		// at least one path are written, because a disabled or empty profile
-		// must not create a rule.
-		const applyRows = () => {
-			const rows = [];
-			const skipped = [];
-			for (const [key, value] of [...saved.entries()].sort()) {
-				const separator = key.indexOf(":");
-				const user = key.slice(0, separator);
-				const pkg = key.slice(separator + 1);
-				if (!value.enabled || !value.paths.length) continue;
-				if (!/^\d+$/.test(user)) { skipped.push(pkg); continue; }
-				rows.push("app " + user + " " + pkg + " 1 " + (value.filterDirectory ? "1" : "0"));
-				for (const path of value.paths) rows.push("path " + path);
-			}
-			return { rows, skipped };
-		};
+		const applyButton = by("applyProfilesBtn");
+		let stored = null;
+		let applying = false;
 		let armed = false;
 		let armTimer = 0;
+		const fromDisk = key => stored?.get(key) ?? emptyDraft();
+		const lastSaved = key => saved.get(key) ?? fromDisk(key);
+
+		function updateApplyButton() {
+			applyButton.disabled = applying || !stored || !saved.size;
+		}
+
 		function disarm() {
+			if (armed) applyState.textContent = "";
 			armed = false;
 			clearTimeout(armTimer);
 			armTimer = 0;
 		}
-		async function applySavedDrafts() {
-			if (typeof applyProfiles !== "function") return;
-			const { rows, skipped } = applyRows();
-			applyState.textContent = t("正在应用逐应用规则...");
-			by("applyProfilesBtn").disabled = true;
+
+		async function loadStoredRules() {
+			if (stored) return;
 			try {
-				await applyProfiles(rows.join("\n"));
-				const count = rows.filter(row => row.startsWith("app ")).length;
-				applyState.textContent = skipped.length
-					? t("已应用 {0} 个应用；{1} 个应用无法确定 Android 用户，未写入。", [count, skipped.length])
-					: t("已写入并热重载 {0} 个应用规则。", [count]);
+				const incoming = await readProfiles();
+				for (const [key, value] of editing) {
+					if (!saved.has(key) && equal(value, fromDisk(key)))
+						editing.set(key, copyDraft(incoming.get(key) ?? emptyDraft()));
+				}
+				stored = incoming;
+				applyState.textContent = "";
+			} catch (_) {
+				applyState.textContent = t("无法读取模块已有规则，不能应用草稿。可刷新后重试。");
+			}
+			updateApplyButton();
+		}
+
+		async function applySavedDrafts() {
+			if (applyButton.disabled || typeof applyProfiles !== "function") return;
+			const changes = new Map([...saved].filter(([key]) => !key.startsWith("?:")));
+			const skipped = saved.size - changes.size;
+			if (!changes.size) {
+				applyState.textContent = t("没有可应用的草稿；无法确定 Android 用户的草稿未写入。");
+				return;
+			}
+			applying = true;
+			updateApplyButton();
+			applyState.textContent = t("正在应用逐应用规则...");
+			try {
+				const result = await applyProfiles(changes, stored);
+				const previous = stored;
+				stored = result.profiles;
+				for (const [key, value] of changes) {
+					if (saved.has(key) && equal(saved.get(key), value)) saved.delete(key);
+				}
+				for (const [key, value] of editing) {
+					if (!saved.has(key) && equal(value, previous.get(key) ?? emptyDraft()))
+						editing.set(key, copyDraft(fromDisk(key)));
+				}
+				applyState.textContent = skipped
+					? t("已确认 {0} 条逐应用路径；{1} 个草稿的 Android 用户未知，未写入。", [result.pathCount, skipped])
+					: t("内核已确认 {0} 条逐应用路径，配置已保存。", [result.pathCount]);
+				renderList();
+				if (current) paintDetail();
 			} catch (error) {
 				applyState.textContent = t("应用失败：{0}", [error && error.message ? error.message : String(error)]);
 			} finally {
-				by("applyProfilesBtn").disabled = false;
+				applying = false;
+				updateApplyButton();
 			}
 		}
 		let previewRequested = false, backupStatus = null;
@@ -98,7 +126,7 @@
 		const draft = () => editing.get(selectedKey);
 
 		function hasDraft(key) {
-			return saved.has(key) || editing.has(key) && !equal(editing.get(key), emptyDraft());
+			return saved.has(key) || editing.has(key) && !equal(editing.get(key), fromDisk(key));
 		}
 
 		function row(app) {
@@ -116,6 +144,7 @@
 			const meta = node("span", "directoryMeta");
 			meta.append(node("span", "uid", uidText(app)));
 			if (hasDraft(key)) meta.append(node("span", "directoryBadge", t("有草稿")));
+			else if (stored?.has(key)) meta.append(node("span", "directoryBadge", t("模块已有规则")));
 			button.append(icon, info, meta);
 			button.addEventListener("click", () => showDetail(app));
 			li.append(button);
@@ -132,6 +161,7 @@
 			list.hidden = !shown.length;
 			more.hidden = shown.length === results.length;
 			by("refreshDirectoryBtn").disabled = state === "loading";
+			updateApplyButton();
 			if (state === "loading") status.textContent = t("正在加载应用...");
 			else if (state === "error") status.textContent = t("无法读取应用列表，请确认已在 KernelSU WebUI 中打开后重试。");
 			else if (state === "ready") {
@@ -147,7 +177,7 @@
 			limit = pageSize;
 			renderList();
 			try {
-				const apps = await readApps(includeSystem.checked);
+				const [apps] = await Promise.all([readApps(includeSystem.checked), loadStoredRules()]);
 				if (token !== request) return;
 				const unique = new Map(apps.map(app => [draftKey(app), app]));
 				entries = [...unique.values()].sort((a, b) => (a.label || a.pkg).localeCompare(b.label || b.pkg) || a.pkg.localeCompare(b.pkg));
@@ -216,7 +246,7 @@
 			const added = [];
 			let kept = 0;
 			for (const [key, value] of decoded.profiles) {
-				if (hasDraft(key)) kept++;
+				if (hasDraft(key) || stored?.has(key)) kept++;
 				else { next.set(key, value); added.push(key); }
 			}
 			// Admission also checks the merged result, so everything we import is exportable.
@@ -228,6 +258,7 @@
 					saved.set(key, copyDraft(value));
 					if (editing.has(key)) editing.set(key, copyDraft(value));
 				}
+				disarm();
 				backupStatus = { added: added.length, kept };
 				input.removeAttribute("aria-invalid");
 				renderList();
@@ -240,15 +271,16 @@
 			input.setAttribute("aria-invalid", String(!!pathError));
 			errorNode.hidden = !pathError;
 			errorNode.textContent = pathError === "duplicate" ? t("这条路径已经添加。")
-				: pathError === "invalid" ? t("请输入非根目录的绝对路径。")
+				: pathError === "invalid" ? t("请输入不超过 255 字节、且不含逗号或分号的非根绝对路径。")
 				: pathError === "full" ? t("此草稿的路径数量已达上限。") : "";
 		}
 
 		function paintDraft() {
 			const value = draft();
-			const dirty = !equal(value, saved.get(selectedKey) ?? emptyDraft());
+			const dirty = !equal(value, lastSaved(selectedKey));
 			save.disabled = discard.disabled = !dirty;
-			by("draftSaveState").textContent = dirty ? t("草稿有未保存的更改") : saved.has(selectedKey) ? t("已保存草稿（未应用）") : "";
+			by("draftSaveState").textContent = dirty ? t("草稿有未保存的更改") : saved.has(selectedKey) ? t("已保存草稿（未应用）")
+				: stored?.has(selectedKey) ? t("模块已有规则") : "";
 		}
 
 		function paintPaths() {
@@ -285,10 +317,11 @@
 		}
 
 		function showDetail(app) {
+			disarm();
 			previousScroll = document.scrollingElement?.scrollTop || 0;
 			current = app;
 			selectedKey = draftKey(app);
-			if (!editing.has(selectedKey)) editing.set(selectedKey, copyDraft(saved.get(selectedKey) ?? emptyDraft()));
+			if (!editing.has(selectedKey)) editing.set(selectedKey, copyDraft(lastSaved(selectedKey)));
 			input.value = "";
 			pathError = "";
 			setIcon(by("detailAppIcon"), app.pkg);
@@ -308,7 +341,8 @@
 			document.scrollingElement?.scrollTo?.(0, previousScroll);
 		});
 		by("openLegacyRulesBtn").addEventListener("click", () => navigate("config"));
-		by("applyProfilesBtn").addEventListener("click", () => {
+		applyButton.addEventListener("click", () => {
+			if (applyButton.disabled) return;
 			// Applying changes what the module does, so the first click only
 			// arms the action and the second one within five seconds runs it.
 			if (!armed) {
@@ -348,18 +382,22 @@
 		});
 		save.addEventListener("click", () => {
 			if (!current || save.disabled) return;
-			saved.set(selectedKey, copyDraft(draft()));
+			disarm();
+			if (equal(draft(), fromDisk(selectedKey))) saved.delete(selectedKey);
+			else saved.set(selectedKey, copyDraft(draft()));
+			updateApplyButton();
 			paintDraft();
 		});
 		discard.addEventListener("click", () => {
 			if (!current || discard.disabled) return;
-			editing.set(selectedKey, copyDraft(saved.get(selectedKey) ?? emptyDraft()));
+			editing.set(selectedKey, copyDraft(lastSaved(selectedKey)));
 			input.value = "";
 			pathError = "";
 			paintDetail();
 			enable.focus();
 		});
 
+		updateApplyButton();
 		return {
 			showList() { if (state === "idle") void refresh(); else renderList(); },
 			refreshText() { renderList(); renderLegacyPreview(); renderBackupStatus(); if (current) paintDetail(); },

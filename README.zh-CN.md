@@ -294,14 +294,14 @@ Scene debugfs 自动识别开关，默认 `0`（关闭）。开启后，启动�
 
 `/data/adb/pathmask/app_profiles.conf`
 
-逐应用规则。由 WebUI「应用」页编辑草稿后点「应用到模块」写入；格式是两行一组：
+逐应用规则。在 WebUI「应用」页确认后，只合并已修改的应用，内核确认后才保存。格式按应用分组：
 
 ```text
 app <userId> <包名> <启用 0|1> <目录过滤 0|1>
 path <绝对路径>
 ```
 
-`path` 行属于它上面那条 `app` 行。只有启用且至少有一条路径的应用会被安装成规则，停用或路径为空的应用不产生任何规则。这些规则与 `target_path.conf` / `scope_mode.conf` **互相独立**：不会继承旧版共享路径，也不会反过来影响旧版规则。开机脚本会把包名按指定 Android 用户解析成 UID，再通过 `/sys/module/pathmask/parameters/app_profiles` 下发给内核，所以重装应用后 UID 变了也不需要改配置。逐应用规则目前只覆盖该 UID 自身的进程，不覆盖它的隔离进程；需要覆盖隔离进程时仍用旧的 deny 模式。
+`path` 行属于它上面那条 `app` 行。只有启用且至少有一条路径的应用才生成运行规则；无有效 UID 的旧版作用域不会随逐应用模式一起加载。路径必须能解析，最长 255 个 UTF-8 字节，不允许逗号或分号。仅当 Android 用户和包名能唯一解析到普通应用 UID 时才接受；共享 UID、系统 UID、isolated 与 app-zygote 进程不纳入逐应用规则。开机脚本提交整份规则，校验失败会明确报错，不进行部分下发。
 
 `/data/adb/pathmask/boot_state`
 

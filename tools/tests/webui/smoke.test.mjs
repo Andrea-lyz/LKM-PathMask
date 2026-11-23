@@ -64,6 +64,7 @@ async function bootPage(options = {}) {
 		url: "https://pathmask.test/",
 	});
 	const { window } = dom;
+	window.TextDecoder = TextDecoder;
 	const thrown = [];
 	window.addEventListener("error", (event) => {
 		if (event && event.message) thrown.push(String(event.message));
@@ -366,12 +367,12 @@ test("the installed app directory keeps per-app drafts isolated and never applie
 test("V2 backup restore keeps legacy and existing drafts unchanged", async () => {
 	const page = await bootReady(await bootPage());
 	try {
-		const shellCalls = page.stub.calls.length;
 		const oldPaths = () => page.$$("#pathList .pathRowPath").map(field => field.value).join("\n");
 		const oldScope = () => page.$('input[name="scope"]:checked').value;
 		const before = [oldPaths(), oldScope()].join("\n");
 		page.$("#dock-apps").click();
 		await waitFor(page, () => page.$$(".directoryRow").length >= 2, "app directory");
+		const shellCalls = page.stub.calls.length;
 		page.$(".directoryCompatibility").open = true;
 		page.$("#previewLegacyMigrationBtn").click();
 		const report = page.$("#legacyMigrationPreview").textContent;
@@ -436,39 +437,88 @@ test("missing draft assets leave the legacy editor reachable", async () => {
 	}
 });
 
-test("applying drafts writes the module ruleset only after confirmation", async () => {
-	const page = await bootReady(await bootPage());
+function profileBridge({ initial = null, noReceipt = false } = {}) {
+	return {
+		respond(command) {
+			if (command.includes("profile_snapshot || exit 22")) {
+				return { stdout: initial === null ? "missing\n" : "a".repeat(64) + "\n" + Buffer.from(initial).toString("base64") };
+			}
+			if (command.includes("mktemp -d '/data/adb/pathmask/.profile-write.XXXXXX'")) {
+				return { stdout: "/data/adb/pathmask/.profile-write.mock00\n" };
+			}
+			const acknowledgment = /PATHMASK_APP_PROFILES_OK \$request (\d+)/.exec(command);
+			if (acknowledgment) {
+				return noReceipt ? { errno: 27, stderr: "No kernel confirmation" }
+					: { stdout: "PATHMASK_APP_PROFILES_OK 12345 " + acknowledgment[1] + "\n" };
+			}
+		},
+	};
+}
+
+async function saveNewProfile(page) {
+	page.$("#dock-apps").click();
+	await waitFor(page, () => page.$$(".directoryRow").length === 3, "directory");
+	page.$(".directoryRow").click();
+	const pkg = page.$("#detailAppPackage").textContent;
+	const path = "/data/local/tmp/new-profile";
+	const input = page.$("#draftPathInput");
+	input.value = path;
+	page.$("#draftPathForm").dispatchEvent(new page.window.Event("submit", { bubbles: true, cancelable: true }));
+	page.$("#draftEnabled").click();
+	page.$("#draftDirectoryFilter").click();
+	page.$("#saveAppDraftBtn").click();
+	page.$("#directoryBackBtn").click();
+	return { pkg, path };
+}
+
+test("confirmed profile changes preserve existing profiles across sessions", async () => {
+	const initial = "app 0 luna.safe.luna 1 0\npath /data/local/tmp/existing-profile\n";
+	const page = await bootReady(await bootPage({ stub: profileBridge({ initial }) }));
 	try {
 		page.$("#dock-apps").click();
-		await waitFor(page, () => page.$$(".directoryRow").length === 3, "directory");
-		page.$(".directoryRow").click();
-		const pkg = page.$("#detailAppPackage").textContent;
-		const path = "/data/local/tmp/applied-path";
-		const input = page.$("#draftPathInput");
-		input.value = path;
-		page.$("#draftPathForm").dispatchEvent(new page.window.Event("submit", { bubbles: true, cancelable: true }));
-		page.$("#draftEnabled").click();
-		page.$("#draftDirectoryFilter").click();
-		page.$("#saveAppDraftBtn").click();
+		await waitFor(page, () => page.$$(".directoryRow").length === 3, "existing profiles loaded");
+		page.$(".directoryRow[data-directory-key='0:luna.safe.luna']").click();
+		assertEqual(page.$("#draftPathList code").textContent, "/data/local/tmp/existing-profile", "restores existing paths");
+		assert(page.$("#draftEnabled").checked, "restores the existing enable switch");
 		page.$("#directoryBackBtn").click();
-
+		const { pkg, path } = await saveNewProfile(page);
 		const before = page.stub.calls.length;
 		page.$("#applyProfilesBtn").click();
-		assertEqual(page.stub.calls.length, before, "the first click must not touch the device");
-		assert(/确认/.test(page.$("#profileApplyState").textContent), "the first click asks for confirmation");
-
+		assertEqual(page.stub.calls.length, before, "first click does not touch the device");
 		page.$("#applyProfilesBtn").click();
-		await waitFor(page, () => page.pm().busy === false && page.stub.calls.length > before, "apply to finish");
-		const write = page.stub.calls.find((call) => call.includes("app_profiles.conf"));
-		assert(write, "writes app_profiles.conf");
-		assert(write.includes(`app 0 ${pkg} 1 1`), `ruleset header: ${write}`);
-		assert(write.includes(path), "ruleset carries the saved path");
-		assert(page.stub.calls.some((call) => call.includes("rmmod")), "applies through a hot reload");
-		assert(/已写入并热重载 1/.test(page.$("#profileApplyState").textContent), "reports what it applied");
-	} finally {
-		await settle(page);
-		page.close();
-	}
+		await waitFor(page, () => page.$("#profileApplyState").textContent.includes("内核已确认 2"), "commit confirmation");
+		const writes = page.stub.calls.filter(command => command.includes(">> '/data/adb/pathmask/.profile-write.mock00/candidate'"));
+		assert(writes.some(command => command.includes("app 0 " + pkg + " 1 1") && command.includes(path)), "updated app was staged");
+		assert(writes.some(command => command.includes("/data/local/tmp/existing-profile")), "unmodified profile was preserved");
+		const commit = page.stub.calls.find(command => command.includes("PATHMASK_APP_PROFILES_OK $request"));
+		assert(commit.includes("--check-app-profiles") && commit.indexOf("grep -Fxq") < commit.indexOf('mv "$candidate" "$cfg"'), "confirmation gates replacement");
+	} finally { await settle(page); page.close(); }
+});
+
+test("profile apply fails visibly without a kernel acknowledgment", async () => {
+	const page = await bootReady(await bootPage({ stub: profileBridge({ noReceipt: true }) }));
+	try {
+		await saveNewProfile(page);
+		page.$("#applyProfilesBtn").click();
+		page.$("#applyProfilesBtn").click();
+		await waitFor(page, () => page.$("#profileApplyState").textContent.includes("应用失败"), "reject missing receipt");
+		assert(!page.$("#applyProfilesBtn").disabled, "pending edits are retained");
+	} finally { await settle(page); page.close(); }
+});
+
+test("profile codec rejects ambiguous and overlong paths", async () => {
+	const page = await bootReady(await bootPage());
+	try {
+		const codec = page.window.PathMaskProfileDrafts;
+		for (const path of ["/fixture/with,comma", "/fixture/with;semicolon", "/" + "测".repeat(85)]) {
+			assert(!codec.validPath(path), "bad path rejected");
+			const input = JSON.stringify({ format: "pathmask-profile-drafts", schemaVersion: 2,
+				profiles: [{ packageName: "com.example.fixture", userId: 0, enabled: true, filterDirectory: false, paths: [path] }] });
+			assert(codec.decodeBackup(input).error === "invalid", "bad backup rejected");
+		}
+		assert(codec.validPath("/" + "a".repeat(254)), "255 bytes accepted");
+		assert(codec.decodeRules("path /fixture") === null, "orphan path is not an empty config");
+	} finally { await settle(page); page.close(); }
 });
 
 test("log tabs publish their state as toggle buttons", async () => {

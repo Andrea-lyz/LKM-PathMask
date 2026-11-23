@@ -1,163 +1,130 @@
 #!/bin/sh
-# Exercises the per-app rule compiler in ksu-module/service.sh without a
-# device: the functions are extracted from the real script (so the test
-# cannot drift into testing a copy) and run against stubbed platform calls.
-#
-# Run: sh tools/tests/test-app-profiles.sh
-set -u
-
+# Run the production validator against test-only package and kernel fixtures.
+set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-SERVICE="$ROOT/ksu-module/service.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+. "$ROOT/ksu-module/app-profiles.sh"
 
-FAIL=0
-fail() { printf 'FAIL %s\n' "$*"; FAIL=$((FAIL + 1)); }
-pass() { printf '  ok %s\n' "$*"; }
-
-# Pull the per-app block out of the real script.
-awk '/^# Per-app rules$/,/^}$/' "$SERVICE" > /dev/null 2>&1 || true
-sed -n '/^# ---------------------------------------------------------------------------$/,$p' "$SERVICE" \
-	| sed -n '1,/^}$/p' > /dev/null 2>&1 || true
-
-BLOCK="$WORK/block.sh"
-awk '
-	/^has_app_profiles\(\) \{/ { on = 1 }
-	on { print }
-	on && /^}$/ { depth++ }
-' "$SERVICE" > /dev/null 2>&1 || true
-
-# Extract from has_app_profiles() through the end of apply_app_profiles().
-awk '
-	/^has_app_profiles\(\) \{/ { keep = 1 }
-	keep { print }
-	keep && /^apply_app_profiles\(\) \{/ { in_apply = 1 }
-	in_apply && /^}$/ { exit }
-' "$SERVICE" > "$BLOCK"
-
-if ! grep -q '^apply_app_profiles() {' "$BLOCK"; then
-	printf 'could not extract the per-app block\n'
-	exit 1
-fi
-
-PERSIST_DIR="$WORK"
-APP_PROFILES_CONFIG="$WORK/app_profiles.conf"
-APP_PROFILE_RULES_TMP="$WORK/app_profiles.rules"
-APP_PROFILE_PARAM="$WORK/app_profiles.param"
-APP_PROFILES_ACTIVE=0
-
-log_i() { :; }
-log_e() { printf 'log_e %s\n' "$*" >&2; }
-
-# Source the real functions first: the block defines its own
-# package_to_uid_for_user(), so the platform stubs have to come after it or
-# they would be shadowed instead of shadowing.
-. "$BLOCK"
-
-package_to_uid() { :; }
-package_to_uid_for_user() {
+pm_inventory_for_user() {
 	case "$1" in
-		com.example.notes) printf '10123\n' ;;
-		com.example.reader) printf '10146\n' ;;
-		com.example.work) printf '1010123\n' ;;
-		*) printf '' ;;
+		0) printf '%s\n' \
+			'package:com.example.notes uid:10123' \
+			'package:com.example.reader uid:10146' \
+			'package:com.example.shared uid:10147' \
+			'package:com.example.also_shared uid:10147' \
+			'package:com.example.unowned uid:99123' \
+			'package:com.example.admin uid:1000' \
+			'package:com.example.wronguser uid:1010123' ;;
+		10) printf '%s\n' 'package:com.example.work uid:1010123' ;;
+		*) return 1 ;;
 	esac
 }
-if ! command -v build_app_profile_rules > /dev/null 2>&1; then
-	printf 'extracted block does not define build_app_profile_rules\n'
-	exit 1
-fi
 
-run_compile() {
-	: > "$APP_PROFILES_CONFIG"
-	cat >> "$APP_PROFILES_CONFIG"
-	APP_PROFILES_ACTIVE=0
-	build_app_profile_rules
+compile() {
+	CASE=$(mktemp -d "$WORK/case.XXXXXX")
+	cat > "$CASE/conf"
+	pm_compile_app_profiles "$CASE/conf" "$CASE" 0
 }
 
-printf 'per-app rule compiler\n'
+reject() {
+	if compile; then
+		printf 'FAIL: accepted %s\n' "$1" >&2
+		exit 1
+	fi
+	printf '  ok rejected %s\n' "$1"
+}
 
-run_compile <<'CONF'
-# comment line
+printf 'per-app rule validation\n'
+compile <<'CONF'
+# profile fixture
 app 0 com.example.notes 1 1
-path /data/local/tmp/a
-path /data/local/tmp/a
-path /storage/emulated/0/b
-
+path /data/local/tmp/example with spaces
 app 0 com.example.reader 1 0
-path /data/local/tmp/c
-
-app 0 com.example.disabled 0 1
-path /data/local/tmp/never
-
-app 0 com.unknown.pkg 1 0
-path /data/local/tmp/skip
-CONF
-
-if [ "$APP_PROFILES_ACTIVE" = "1" ]; then pass "activates when rules compile"; else fail "APP_PROFILES_ACTIVE not set"; fi
-
-if grep -qx '@10123:d:/data/local/tmp/a,/storage/emulated/0/b' "$APP_PROFILE_RULES_TMP"; then
-	pass "enabled app with dirent filtering, duplicate path dropped"
-else
-	fail "unexpected rule for notes: $(cat "$APP_PROFILE_RULES_TMP")"
-fi
-
-if grep -qx '@10146:-:/data/local/tmp/c' "$APP_PROFILE_RULES_TMP"; then
-	pass "second app keeps its own flags"
-else
-	fail "reader rule missing: $(cat "$APP_PROFILE_RULES_TMP")"
-fi
-
-if grep -q 'never\|skip' "$APP_PROFILE_RULES_TMP"; then
-	fail "disabled or unresolvable apps must not emit rules"
-else
-	pass "disabled and unresolvable apps skipped"
-fi
-
-# Work-profile users must resolve through the explicit user argument.
-run_compile <<'CONF'
+path /data/local/tmp/reader
 app 10 com.example.work 1 0
 path /data/local/tmp/work
+app 0 com.example.disabled 0 1
+path /data/local/tmp/disabled
 CONF
-if grep -qx '@1010123:-:/data/local/tmp/work' "$APP_PROFILE_RULES_TMP"; then
-	pass "work-profile UID preserved"
-else
-	fail "work profile rule wrong: $(cat "$APP_PROFILE_RULES_TMP")"
-fi
+[ "$APP_PROFILE_COUNT" = 3 ]
+grep -Fxq '10123 1 /data/local/tmp/example with spaces' "$APP_PROFILE_RULES"
+grep -Fxq '10146 0 /data/local/tmp/reader' "$APP_PROFILE_RULES"
+grep -Fxq '1010123 0 /data/local/tmp/work' "$APP_PROFILE_RULES"
+printf '  ok exact user/flag/path and inactive profile coverage\n'
 
-# A long path list must be split so every sysfs write stays inside one page.
-run_compile <<'CONF'
+compile <<'CONF'
 app 0 com.example.notes 1 1
+app 0 com.example.off 0 0
+path /data/local/tmp/off
 CONF
-i=0
-while [ "$i" -lt 60 ]; do
-	printf 'path /data/local/tmp/some/long/path/segment-%02d/with/a/long/name\n' "$i" >> "$APP_PROFILES_CONFIG"
-	i=$((i + 1))
+[ "$APP_PROFILE_COUNT" = 0 ]
+[ ! -s "$APP_PROFILE_RULES" ]
+printf '  ok enabled empty and disabled nonempty profiles cannot combine\n'
+
+for pname in shared unowned admin wronguser note; do
+	reject "invalid ownership for $pname" <<CONF
+app 0 com.example.$pname 1 0
+path /data/local/tmp/fixture
+CONF
 done
-APP_PROFILES_ACTIVE=0
-build_app_profile_rules
-if [ "$(grep -c . "$APP_PROFILE_RULES_TMP")" -gt 1 ]; then
-	pass "long path list split across writes"
-else
-	fail "long list was not split"
-fi
-if [ "$(awk 'length > 3000 { print }' "$APP_PROFILE_RULES_TMP" | wc -l)" -eq 0 ]; then
-	pass "every write stays under the page budget"
-else
-	fail "a write exceeds the page budget"
-fi
+reject 'standalone path' <<'CONF'
+path /data/local/tmp/fixture
+CONF
+reject 'comma in a path' <<'CONF'
+app 0 com.example.notes 1 0
+path /data/local/tmp/sample,name
+CONF
+reject 'semicolon in a path' <<'CONF'
+app 0 com.example.notes 1 0
+path /data/local/tmp/sample;name
+CONF
+reject 'duplicate path' <<'CONF'
+app 0 com.example.notes 1 0
+path /data/local/tmp/sample
+path /data/local/tmp/sample
+CONF
+reject 'duplicate profile' <<'CONF'
+app 0 com.example.notes 1 0
+app 0 com.example.notes 0 1
+CONF
+{
+	printf 'app 0 com.example.notes 1 0\npath /'
+	awk 'BEGIN { for (i=0; i<255; i++) printf "a"; printf "\n" }'
+} | reject 'path beyond the kernel byte limit'
+{
+	printf 'app 0 com.example.notes 1 0\npath /sample\000name\n'
+} | reject 'NUL in configuration'
 
-# No profile file at all means the legacy path is untouched.
-rm -f "$APP_PROFILES_CONFIG"
-APP_PROFILES_ACTIVE=1
-build_app_profile_rules
-if [ "$APP_PROFILES_ACTIVE" = "0" ]; then pass "absent file yields no rules"; else fail "absent file still active"; fi
-
-if has_app_profiles; then fail "has_app_profiles true without a file"; else pass "has_app_profiles false without a file"; fi
-
-if [ "$FAIL" -eq 0 ]; then
-	printf '\nall per-app compiler checks passed\n'
-	exit 0
+if pm_legacy_scope_resolved allow '' || pm_legacy_scope_resolved deny ''; then
+	printf 'FAIL: legacy scope without UIDs would load\n' >&2; exit 1
 fi
-printf '\n%s check(s) failed\n' "$FAIL"
-exit 1
+pm_legacy_scope_resolved allow 10123
+pm_legacy_scope_resolved global ''
+printf '  ok empty scoped UID sets block legacy paths\n'
+
+compile <<'CONF'
+app 0 com.example.notes 1 0
+path /data/local/tmp/fixture
+CONF
+APP_PROFILE_PARAM="$WORK/kernel-receipt"
+: > "$APP_PROFILE_PARAM"
+TRACE="$WORK/commands"
+MODE=reject
+pm_write_app_profile() {
+	printf '%s\n' "${1}" >> "$TRACE"
+	case "${1}" in
+		'add '*) [ "$MODE" != reject ] || return 1 ;;
+		'commit '*) if [ "$MODE" = confirm ]; then printf '123 1\n' > "$APP_PROFILE_PARAM"; fi ;;
+	esac
+}
+if pm_apply_app_profiles 123; then exit 1; fi
+grep -Fxq 'abort 123' "$TRACE"
+if grep -Fxq 'commit 123' "$TRACE"; then exit 1; fi
+printf '  ok failed add aborts before commit\n'
+MODE=stale
+printf '122 1\n' > "$APP_PROFILE_PARAM"
+if pm_apply_app_profiles 123; then exit 1; fi
+MODE=confirm
+pm_apply_app_profiles 123
+printf '  ok acknowledgment must match generation and path count\n'
