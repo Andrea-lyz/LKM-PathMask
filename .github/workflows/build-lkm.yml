@@ -21,6 +21,8 @@ jobs:
       - uses: actions/checkout@v6
       - name: Test shell packaging, dependency pins, and local build wrapper
         run: sh tools/tests/test-build-tools.sh
+      - name: Test per-app rule compiler
+        run: sh tools/tests/test-app-profiles.sh
       - name: Test PowerShell packaging and bundled defaults
         shell: pwsh
         run: ./tools/tests/test-packaging.ps1

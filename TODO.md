@@ -18,6 +18,33 @@ Follow-up ideas:
 - Add a runtime debug log that prints the number of hidden entries removed from
   each `getdents64` buffer.
 
+## Per-app rules
+
+Status: implemented; kernel side still needs a DDK build and a device run.
+
+Current behavior:
+
+- `app_profiles.conf` holds one profile per (Android user, package): an enable
+  switch, a directory-listing switch and its own path list.
+- The kernel target table gained an owner UID per entry. A legacy target keeps
+  the `scope_mode` / `deny_uids` gate; a per-app target is hidden only from
+  that exact UID (real, effective or filesystem), so two apps can carry
+  different paths in one module instance.
+- Rules reach the kernel after insmod through
+  `/sys/module/pathmask/parameters/app_profiles`; each write appends entries,
+  `-` clears the per-app ones. This avoids the kernel command-line size limit
+  and lets `service.sh` chunk a long ruleset.
+- `profile_mode=1` lets the module load with no legacy `target_paths`, and
+  never falls back to the legacy single-path default in that case.
+- The WebUI writes the ruleset only when the user presses 应用到模块 twice; the
+  legacy files are never rewritten by that action.
+
+Known limits:
+
+- Per-app rules cover the app's own UID, not its isolated processes.
+- Only paths the boot script can resolve for the listed Android user apply;
+  unresolved packages are logged and skipped.
+
 ## Scoped hiding / blacklist / whitelist
 
 Status: implemented for UID blacklist and whitelist.

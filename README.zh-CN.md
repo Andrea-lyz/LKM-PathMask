@@ -292,6 +292,17 @@ Scene debugfs 自动识别开关，默认 `0`（关闭）。开启后，启动�
 
 写入行为伪装策略，控制检测方对隐藏路径执行写操作（mkdir / Create / rename / 删除）时得到的错误码。`passthrough`（默认）不拦截写操作，由原生文件系统返回原厂错误码；`eacces` 让写操作返回与"路径真实不存在"一致的错误码（mkdir/Create 等返回 EACCES，删除/rename 源返回 ENOENT），阻断存在性反推；`enoent` 为旧版行为，一律返回 ENOENT。在 WebUI「防护」页切换，自动保存并热重载。
 
+`/data/adb/pathmask/app_profiles.conf`
+
+逐应用规则。由 WebUI「应用」页编辑草稿后点「应用到模块」写入；格式是两行一组：
+
+```text
+app <userId> <包名> <启用 0|1> <目录过滤 0|1>
+path <绝对路径>
+```
+
+`path` 行属于它上面那条 `app` 行。只有启用且至少有一条路径的应用会被安装成规则，停用或路径为空的应用不产生任何规则。这些规则与 `target_path.conf` / `scope_mode.conf` **互相独立**：不会继承旧版共享路径，也不会反过来影响旧版规则。开机脚本会把包名按指定 Android 用户解析成 UID，再通过 `/sys/module/pathmask/parameters/app_profiles` 下发给内核，所以重装应用后 UID 变了也不需要改配置。逐应用规则目前只覆盖该 UID 自身的进程，不覆盖它的隔离进程；需要覆盖隔离进程时仍用旧的 deny 模式。
+
 `/data/adb/pathmask/boot_state`
 
 开机脚本运行到哪一阶段的状态文件，由 service.sh 自动写入：`init`、`waiting-targets`、`waiting-packages`、`loaded`、`already-loaded`、`paused`、`skipped-*`、`failed-*` 等。WebUI 健康检查会读它显示「正在等待，剩 X 秒」之类的进度，避免误以为没生效。手动改没意义，是观测用的。

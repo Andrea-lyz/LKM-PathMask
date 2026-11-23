@@ -81,7 +81,8 @@ function describe(el, marker) {
 
 const EN_TEXT = extractEnText(appSource);
 const enKeys = new Set(Object.keys(EN_TEXT));
-const { keys: callKeys, dynamic } = extractTranslateCalls(appSource);
+const directorySource = readFileSync(join(webroot, "app-directory.js"), "utf8");
+const { keys: callKeys, dynamic } = extractTranslateCalls(appSource + "\n" + directorySource);
 const markup = markupKeys();
 
 /*

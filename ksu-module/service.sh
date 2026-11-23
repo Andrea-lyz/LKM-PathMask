@@ -30,6 +30,7 @@ MOD_SYSCALL_HOOKS_CONFIG="$MODDIR/syscall_hooks.conf"
 MOD_WRITE_OP_POLICY_CONFIG="$MODDIR/write_op_policy.conf"
 MOD_AUTO_SCENE_DEBUGFS_CONFIG="$MODDIR/auto_scene_debugfs.conf"
 MOD_PROC_GUARD_CONFIG="$MODDIR/procguard.conf"
+MOD_APP_PROFILES_CONFIG="$MODDIR/app_profiles.conf"
 
 CONFIG_PATH="$PERSIST_DIR/target_path.conf"
 HIDE_DIRENTS_CONFIG="$PERSIST_DIR/hide_dirents.conf"
@@ -45,6 +46,7 @@ SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/syscall_hooks.conf"
 WRITE_OP_POLICY_CONFIG="$PERSIST_DIR/write_op_policy.conf"
 AUTO_SCENE_DEBUGFS_CONFIG="$PERSIST_DIR/auto_scene_debugfs.conf"
 PROC_GUARD_CONFIG="$PERSIST_DIR/procguard.conf"
+APP_PROFILES_CONFIG="$PERSIST_DIR/app_profiles.conf"
 SCENE_DEBUGFS_PATHS_PATH="$PERSIST_DIR/scene_debugfs_paths"
 SCENE_DEBUGFS_STATE_PATH="$PERSIST_DIR/scene_debugfs_state"
 SCENE_WATCH_STOP_PATH="$PERSIST_DIR/scene_debugfs_watch.stop"
@@ -320,6 +322,7 @@ init_persistent_config() {
 		WRITE_OP_POLICY_CONFIG="$MOD_WRITE_OP_POLICY_CONFIG"
 		AUTO_SCENE_DEBUGFS_CONFIG="$MOD_AUTO_SCENE_DEBUGFS_CONFIG"
 		PROC_GUARD_CONFIG="$MOD_PROC_GUARD_CONFIG"
+		APP_PROFILES_CONFIG="$MOD_APP_PROFILES_CONFIG"
 		return
 	fi
 
@@ -372,6 +375,7 @@ init_persistent_config() {
 	seed_config_file "$WRITE_OP_POLICY_CONFIG" "$MOD_WRITE_OP_POLICY_CONFIG" "passthrough"
 	seed_config_file "$AUTO_SCENE_DEBUGFS_CONFIG" "$MOD_AUTO_SCENE_DEBUGFS_CONFIG" "0"
 	seed_config_file "$PROC_GUARD_CONFIG" "$MOD_PROC_GUARD_CONFIG" "0"
+	seed_config_file "$APP_PROFILES_CONFIG" "$MOD_APP_PROFILES_CONFIG" ""
 
 	# Existing installs from v2.2.8 - v2.3.1 shipped enable_syscall_hooks=0
 	# as a defensive default (Holmes 04 mitigation pre-bisect). Now that the
@@ -797,6 +801,162 @@ package_to_uid() {
 	fi
 
 	package_to_uid_from_data_dir "$1" | head -n 1
+}
+
+# ---------------------------------------------------------------------------
+# Per-app rules
+#
+# app_profiles.conf is written by the WebUI only after the user applies their
+# drafts. Each entry is resolved here, once per boot or reload, because a UID
+# is not a persistent identity:
+#
+#   app <userId> <packageName> <enabled 0|1> <filterDirectory 0|1>
+#   path <absolute path>
+#
+# "path" lines belong to the preceding "app" line. Nothing in this file
+# affects the legacy target_path/scope_mode rules, and the legacy files never
+# create per-app rules.
+# ---------------------------------------------------------------------------
+APP_PROFILE_RULES_TMP="$PERSIST_DIR/app_profiles.rules"
+APP_PROFILES_ACTIVE=0
+APP_PROFILE_PARAM=/sys/module/pathmask/parameters/app_profiles
+
+# Cheap pre-insmod predicate: decides profile_mode and whether an empty
+# legacy target list is still worth loading for.
+has_app_profiles() {
+	[ -f "$APP_PROFILES_CONFIG" ] || return 1
+	grep -qE '^app [^ ]+ [^ ]+ 1( |$)' "$APP_PROFILES_CONFIG" 2>/dev/null || return 1
+	grep -q '^path /' "$APP_PROFILES_CONFIG" 2>/dev/null || return 1
+	return 0
+}
+
+# Unlike the legacy helpers, the Android user is explicit: work-profile apps
+# resolve to their own UID instead of being folded into user 0.
+package_to_uid_for_user() {
+	PKG_NAME="$1"
+	PKG_USER="${2:-0}"
+
+	if [ "$PKG_USER" = "0" ]; then
+		package_to_uid "$PKG_NAME" | head -n 1
+		return
+	fi
+
+	PM_OUT="$(cmd package list packages --user "$PKG_USER" -U "$PKG_NAME" 2>/dev/null || true)"
+	[ -n "$PM_OUT" ] || PM_OUT="$(pm list packages --user "$PKG_USER" -U "$PKG_NAME" 2>/dev/null || true)"
+	printf '%s\n' "$PM_OUT" | while IFS= read -r PM_LINE; do
+		case "$PM_LINE" in
+			package:*" uid:"*) printf '%s\n' "${PM_LINE##* uid:}" ;;
+		esac
+	done | head -n 1
+}
+
+RULE_UID=""
+RULE_FLAGS="-"
+RULE_BUF=""
+
+flush_app_rule() {
+	[ -n "$RULE_UID" ] || return 0
+	[ -n "$RULE_BUF" ] || return 0
+	printf '@%s:%s:%s\n' "$RULE_UID" "$RULE_FLAGS" "$RULE_BUF" >> "$APP_PROFILE_RULES_TMP"
+	RULE_BUF=""
+}
+
+# Compile app_profiles.conf into one sysfs write per line. Entries are
+# additive inside the kernel, so a long path list can be split across writes
+# without changing what it hides.
+build_app_profile_rules() {
+	APP_PROFILES_ACTIVE=0
+	RULE_UID=""
+	RULE_FLAGS="-"
+	RULE_BUF=""
+	: > "$APP_PROFILE_RULES_TMP" 2>/dev/null || return 0
+	[ -f "$APP_PROFILES_CONFIG" ] || return 0
+
+	APP_USER="0"
+	APP_PACKAGE=""
+	APP_ENABLED="0"
+	APP_FILTER="0"
+
+	while IFS= read -r APP_LINE || [ -n "$APP_LINE" ]; do
+		APP_LINE="$(printf '%s' "$APP_LINE" | tr -d '\r')"
+		case "$APP_LINE" in
+			''|'#'*)
+				continue
+				;;
+		esac
+
+		case "$APP_LINE" in
+			app\ *)
+				flush_app_rule
+				RULE_UID=""
+				RULE_FLAGS="-"
+				RULE_BUF=""
+				# Fields never contain spaces: a package name cannot.
+				set -- $APP_LINE
+				APP_USER="${2:-0}"
+				APP_PACKAGE="${3:-}"
+				APP_ENABLED="${4:-0}"
+				APP_FILTER="${5:-0}"
+				[ "$APP_ENABLED" = "1" ] || continue
+				[ -n "$APP_PACKAGE" ] || continue
+
+				APP_UID="$(package_to_uid_for_user "$APP_PACKAGE" "$APP_USER" | head -n 1)"
+				case "$APP_UID" in
+					''|*[!0-9]*)
+						log_i "app profile: cannot resolve $APP_PACKAGE (user $APP_USER)"
+						APP_UID=""
+						continue
+						;;
+				esac
+				RULE_UID="$APP_UID"
+				[ "$APP_FILTER" = "1" ] && RULE_FLAGS="d"
+				;;
+			path\ *)
+				[ -n "$RULE_UID" ] || continue
+				APP_PATH="${APP_LINE#path }"
+				APP_PATH="$(printf '%s' "$APP_PATH" | sed 's/^ *//; s/ *$//')"
+				case "$APP_PATH" in
+					/*) ;;
+					*) continue ;;
+				esac
+				case ",$RULE_BUF," in
+					*",$APP_PATH,"*) continue ;;
+				esac
+				if [ -n "$RULE_BUF" ]; then
+					RULE_BUF="$RULE_BUF,$APP_PATH"
+				else
+					RULE_BUF="$APP_PATH"
+				fi
+				# One sysfs write is one page; flush with room to spare.
+				if [ "${#RULE_BUF}" -gt 2800 ]; then
+					flush_app_rule
+				fi
+				;;
+		esac
+	done < "$APP_PROFILES_CONFIG"
+	flush_app_rule
+
+	if [ -s "$APP_PROFILE_RULES_TMP" ]; then
+		APP_PROFILES_ACTIVE=1
+	fi
+}
+
+apply_app_profiles() {
+	[ "$APP_PROFILES_ACTIVE" = "1" ] || return 0
+	if [ ! -e "$APP_PROFILE_PARAM" ]; then
+		log_e "kernel exposes no app_profiles parameter; per-app rules not applied"
+		return 0
+	fi
+	if ! printf '%s' "-" > "$APP_PROFILE_PARAM" 2>/dev/null; then
+		log_e "cannot reset per-app rules"
+		return 0
+	fi
+	while IFS= read -r RULE_LINE || [ -n "$RULE_LINE" ]; do
+		[ -n "$RULE_LINE" ] || continue
+		printf '%s' "$RULE_LINE" > "$APP_PROFILE_PARAM" 2>/dev/null || \
+			log_e "failed to write app rule: $RULE_LINE"
+	done < "$APP_PROFILE_RULES_TMP"
+	log_i "applied $(grep -c . "$APP_PROFILE_RULES_TMP" 2>/dev/null || echo 0) per-app rule(s)"
 }
 
 read_scope_uid_config() {
@@ -1353,7 +1513,16 @@ elif [ -z "$SYSCALL_HOOKS" ]; then
 	SYSCALL_HOOKS="all"
 fi
 
-if [ -z "$TARGET_RAW_LINES" ] && [ "$AUTO_SCENE_DEBUGFS" = "0" ]; then
+# Per-app rules are compiled after insmod (UID resolution needs a live
+# package manager), but profile_mode has to be decided before it, and an
+# empty legacy list is legitimate when every rule is per-app.
+PROFILE_MODE=0
+if has_app_profiles; then
+	PROFILE_MODE=1
+	log_i "per-app rules present; loading with profile_mode=1"
+fi
+
+if [ -z "$TARGET_RAW_LINES" ] && [ "$AUTO_SCENE_DEBUGFS" = "0" ] && [ "$PROFILE_MODE" = "0" ]; then
 	log_e "empty target path list"
 	write_boot_state "skipped-empty-targets" "no path configured" ""
 	exit 1
@@ -1380,15 +1549,18 @@ fi
 WAIT_DEADLINE=$(( $(date +%s 2>/dev/null || echo 0) + WAIT_SECONDS ))
 
 if ! wait_for_targets "$WAIT_DEADLINE"; then
-	log_i "no configured targets exist, skip loading"
-	write_boot_state "skipped-targets-missing" "$TARGET_PATHS" ""
-	start_scene_debugfs_watcher "0"
-	exit 0
+	if [ "$PROFILE_MODE" = "0" ]; then
+		log_i "no configured targets exist, skip loading"
+		write_boot_state "skipped-targets-missing" "$TARGET_PATHS" ""
+		start_scene_debugfs_watcher "0"
+		exit 0
+	fi
+	log_i "no legacy targets; continuing for per-app rules only"
 fi
 
 if [ "$SCOPE_MODE" = "deny" ] || [ "$SCOPE_MODE" = "allow" ]; then
 	wait_for_scope_packages "$WAIT_DEADLINE"
-	if [ -z "$DENY_UIDS" ]; then
+	if [ -z "$DENY_UIDS" ] && [ "$PROFILE_MODE" = "0" ]; then
 		if [ "$SCOPE_MODE" = "allow" ]; then
 			log_i "scope_mode=allow but no allow UIDs resolved, skip loading"
 			write_boot_state "skipped-no-uids" "allow mode without resolved UIDs" ""
@@ -1421,7 +1593,7 @@ fi
 # creates (or replaces) its randomized debugfs mount between target waiting
 # and module loading.
 rebuild_target_paths
-if ! any_target_exists; then
+if ! any_target_exists && [ "$PROFILE_MODE" = "0" ]; then
 	log_i "no targets exist after final pre-insmod scan, skip loading"
 	write_boot_state "skipped-targets-missing" "$TARGET_PATHS" ""
 	start_scene_debugfs_watcher "0"
@@ -1446,9 +1618,11 @@ if [ -f "$PROC_GUARD_KO_PATH" ] && [ "$(head -n 1 "$PROC_GUARD_CONFIG" 2>/dev/nu
 	fi
 fi
 
-if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS" write_op_policy="$WRITE_OP_POLICY"; then
+if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS" write_op_policy="$WRITE_OP_POLICY" profile_mode="$PROFILE_MODE"; then
 	reset_load_failure_guard
-	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS syscall_hooks=$SYSCALL_HOOKS write_op_policy=$WRITE_OP_POLICY"
+	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS syscall_hooks=$SYSCALL_HOOKS write_op_policy=$WRITE_OP_POLICY profile_mode=$PROFILE_MODE"
+	build_app_profile_rules
+	apply_app_profiles
 	write_boot_state "loaded" "$TARGET_PATHS" ""
 	if [ "$AUTO_SCENE_DEBUGFS" = "1" ]; then
 		write_scene_debugfs_state "$SCENE_DEBUGFS_STATUS" "1" "discovered $SCENE_DEBUGFS_COUNT matching mount(s)"

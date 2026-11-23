@@ -1,518 +1,660 @@
 :root {
-	color-scheme: light dark;
-	font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	background: Canvas;
-	color: CanvasText;
+	background: var(--md-sys-color-surface);
+	color: var(--md-sys-color-on-surface);
+	font: var(--md-sys-typescale-body-large);
+	/* Heights include wrapped labels and device insets (see observeChromeOffsets). */
+	scroll-padding-top: calc(var(--topbar-h, 4rem) + var(--tabs-h, 3rem) + var(--space-2));
+	scroll-padding-bottom: calc(var(--actions-h, 0px) + var(--glass-dock-clearance));
 }
 
-* {
+*, *::before, *::after {
 	box-sizing: border-box;
 }
 
-html,
 body {
-	overflow-x: hidden;
-	max-width: 100%;
-}
-
-body {
-	margin: 0;
 	min-height: 100vh;
-	/*
-	 * Both sticky offsets are measured by app.js (observeChromeOffsets)
-	 * and published as custom properties. The fallbacks are the real
-	 * defaults at 1x font scale rather than the previous guesses: the
-	 * old fixed 92px reserved more room than the 68px footer needs, and
-	 * the tabs' old `top: 67px` was ~6px short of the top bar's actual
-	 * height, so the tab row tucked under it -- and the gap widened
-	 * every time #statusText wrapped onto a second line.
-	 */
-	padding-bottom: calc(var(--actions-h, 68px) + 24px);
-	background: Canvas;
+	min-height: 100dvh;
+	margin: 0;
+	padding-bottom: calc(var(--actions-h, 0px) + var(--glass-dock-clearance));
+	overflow-wrap: anywhere;
 }
 
-/*
- * One visible focus ring for the whole page. The WebView default is
- * easy to lose against the Highlight-coloured active tab and the
- * tinted panel backgrounds, and keyboard / switch-access users had no
- * other indicator of where focus was.
- */
+h1, h2, h3, p {
+	margin: 0;
+}
+
+h1 {
+	font: var(--md-sys-typescale-title-large);
+}
+
+h2, h3 {
+	font: var(--md-sys-typescale-title-medium);
+}
+
 :focus-visible {
-	outline: 2px solid Highlight;
+	outline: 2px solid var(--md-sys-color-primary);
 	outline-offset: 2px;
 }
 
-input[type="checkbox"],
-input[type="radio"] {
-	accent-color: Highlight;
+input, textarea, button {
+	font: inherit;
+}
+
+input[type="checkbox"], input[type="radio"] {
+	accent-color: var(--md-sys-color-primary);
+}
+
+input[type="checkbox"] {
+	flex: none;
+	width: 1.125rem;
+	height: 1.125rem;
+	margin: 0;
+}
+
+button, .iconButton {
+	--button-bg: transparent;
+	--button-fg: var(--md-sys-color-primary);
+	--button-outline: var(--md-sys-color-outline);
+	display: inline-flex;
+	min-width: 0;
+	min-height: var(--touch-target);
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-4);
+	border: 1px solid var(--button-outline);
+	border-radius: var(--md-sys-shape-corner-full);
+	background: var(--button-bg);
+	color: var(--button-fg);
+	font: var(--md-sys-typescale-label-large);
+	text-align: center;
+	text-decoration: none;
+	cursor: pointer;
+	transition: background-color var(--md-sys-motion-short) var(--md-sys-motion-standard);
+}
+
+.primary {
+	--button-bg: var(--md-sys-color-primary);
+	--button-fg: var(--md-sys-color-on-primary);
+	--button-outline: transparent;
+}
+
+.tonal {
+	--button-bg: var(--md-sys-color-secondary-container);
+	--button-fg: var(--md-sys-color-on-secondary-container);
+	--button-outline: transparent;
+}
+
+.textButton, .iconButton, .topTextButton {
+	--button-outline: transparent;
+}
+
+@media (hover: hover) {
+	button:not(:disabled):hover, .iconButton:hover {
+		background: color-mix(in srgb, var(--button-fg) var(--md-sys-state-hover), var(--button-bg));
+	}
+}
+
+button:not(:disabled):active, .iconButton:active {
+	background: color-mix(in srgb, var(--button-fg) var(--md-sys-state-pressed), var(--button-bg));
+}
+
+button:disabled {
+	background: var(--md-sys-color-surface-container-high);
+	color: var(--md-sys-color-on-surface-variant);
+	border-color: transparent;
+	cursor: default;
+	opacity: .62;
+}
+
+.iconButton {
+	--button-fg: var(--md-sys-color-on-surface-variant);
+	flex: none;
+	width: var(--touch-target);
+	height: var(--touch-target);
+	padding: 0;
+}
+
+.iconButton svg, .topTextButton svg {
+	display: block;
+	flex: none;
+	width: 1.25rem;
+	height: 1.25rem;
+	fill: currentColor;
+}
+
+.chromeInner, main {
+	width: 100%;
+	max-width: var(--content-width);
+	margin-inline: auto;
+	padding-inline: var(--gutter);
+	padding-left: max(var(--gutter), env(safe-area-inset-left, 0px));
+	padding-right: max(var(--gutter), env(safe-area-inset-right, 0px));
 }
 
 .topbar {
 	position: sticky;
 	top: 0;
 	z-index: 20;
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 14px;
-	padding: 16px 14px 12px;
-	background: color-mix(in srgb, Canvas 90%, CanvasText 10%);
-	border-bottom: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
+	padding-top: env(safe-area-inset-top, 0px);
+	background: var(--md-sys-color-surface);
 }
 
-.topbar > div:first-child {
+.topbarInner, .appIdentity, .topActions {
+	display: flex;
 	min-width: 0;
-	flex: 1;
+	align-items: center;
 }
 
-h1,
-h2,
-p {
-	margin: 0;
+.topbarInner {
+	min-height: 4rem;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: var(--space-2);
+	padding-block: var(--space-2);
 }
 
-h1 {
+.appIdentity {
+	flex: 1 1 8.5rem;
+	gap: var(--space-3);
+}
+
+.appMark {
+	display: grid;
+	flex: none;
+	width: 2.5rem;
+	height: 2.5rem;
+	place-items: center;
+	border-radius: var(--md-sys-shape-corner-medium);
+	background: var(--md-sys-color-primary-container);
+	color: var(--md-sys-color-on-primary-container);
+}
+
+.appMark svg {
+	width: 1.5rem;
+	height: 1.5rem;
+}
+
+.appHeading {
+	min-width: 0;
+}
+
+.appHeading h1 {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: baseline;
-	gap: 5px;
-	font-size: 22px;
-	line-height: 1.15;
-	white-space: nowrap;
+	gap: 0 var(--space-2);
 }
 
-h1 small {
-	font-size: 12px;
-	font-weight: 650;
-	color: color-mix(in srgb, CanvasText 72%, transparent);
-}
-
-h2 {
-	font-size: 16px;
-	line-height: 1.2;
+.appHeading h1 small {
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-label-medium);
 }
 
 #statusText {
-	margin-top: 4px;
-	font-size: 13px;
-	color: color-mix(in srgb, CanvasText 66%, transparent);
-	overflow-wrap: anywhere;
+	margin-top: var(--space-1);
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-body-small);
+}
+
+#statusText.statusError {
+	color: var(--md-sys-color-error);
 }
 
 .topActions {
-	display: flex;
-	align-items: center;
-	gap: 8px;
+	flex: none;
+	margin-inline-start: auto;
+	gap: var(--space-1);
 }
 
 .topTextButton {
-	min-width: 48px;
-	padding: 0 9px;
-	font-size: 14px;
-}
-
-.iconButton {
-	display: grid;
-	place-items: center;
-	width: 40px;
-	height: 40px;
-	padding: 0;
-	border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
-	border-radius: 6px;
-	color: CanvasText;
-	background: color-mix(in srgb, Canvas 88%, CanvasText 12%);
-	line-height: 0;
-}
-
-.iconButton svg {
-	width: 20px;
-	height: 20px;
-	fill: currentColor;
-	display: block;
+	--button-fg: var(--md-sys-color-on-surface-variant);
+	min-width: var(--touch-target);
+	padding-inline: var(--space-3);
 }
 
 .tabs {
 	position: sticky;
-	top: var(--topbar-h, 73px);
+	top: var(--topbar-h, 4rem);
 	z-index: 18;
-	display: flex;
-	flex-wrap: wrap;
-	align-items: stretch;
-	gap: 6px;
-	padding: 8px 14px;
-	background: Canvas;
-	border-bottom: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
+	background: var(--md-sys-color-surface);
+	border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
-/*
- * The five tabs are wrapped so the tablist contains only tabs: the
- * language switch has to stay on this row (see the .langSwitch comment
- * below) but it is not a tab, and a non-tab child inside role=tablist
- * breaks the semantics screen readers rely on. The wrapper takes over
- * the flexible sizing the bare buttons used to do.
- */
+/* Keep the language group outside the ARIA tablist. */
 .tabGroup {
 	display: flex;
-	flex: 1 1 auto;
-	align-items: stretch;
-	gap: 6px;
+	flex: 1 1 15rem;
 	min-width: 0;
 }
 
 .tab {
-	flex: 1 1 44px;
-	min-width: 0;
-	padding: 0 6px;
+	--button-fg: var(--md-sys-color-on-surface-variant);
+	--button-outline: transparent;
+	position: relative;
+	flex: 1 1 auto;
+	padding-inline: var(--space-2);
+	border-radius: var(--md-sys-shape-corner-small) var(--md-sys-shape-corner-small) 0 0;
 }
 
-.tab,
-.logTab {
-	min-height: 38px;
+.tab.active {
+	--button-fg: var(--md-sys-color-primary);
+	font-weight: 700;
 }
 
-.tab.active,
-.logTab.active {
-	background: Highlight;
-	color: HighlightText;
-	border-color: Highlight;
+.tab.active::after {
+	position: absolute;
+	inset: auto 25% 0;
+	height: 3px;
+	border-radius: var(--md-sys-shape-corner-small) var(--md-sys-shape-corner-small) 0 0;
+	background: var(--md-sys-color-primary);
+	content: "";
 }
 
-/*
- * Language switch. It lives at the end of the sticky tab row instead of
- * the top bar: the top bar is already full (捐赠 / 刷新 / GitHub icon next
- * to a nowrap h1), and a fourth control there pushes the title line past
- * the viewport on a 360px-wide phone. The tab row has five two-glyph
- * labels, so a ~58px pill fits on the same line; because the row is a
- * wrapping flex container, large system font scaling moves the pill to a
- * second line instead of clipping the tabs.
- */
+.tab:focus-visible, .langOption:focus-visible {
+	outline-offset: -3px;
+}
+
 .langSwitch {
-	display: grid;
-	grid-auto-flow: column;
-	flex: 0 0 auto;
-	border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
-	border-radius: 6px;
-	overflow: hidden;
+	display: inline-flex;
+	flex: none;
+	margin: var(--space-1) 0 var(--space-1) auto;
+	border: 1px solid var(--md-sys-color-outline);
+	border-radius: var(--md-sys-shape-corner-full);
 }
 
 .langOption {
-	min-width: 24px;
-	min-height: 38px;
-	padding: 0 5px;
-	border: 0;
-	border-radius: 0;
-	font-size: 13px;
-	color: color-mix(in srgb, CanvasText 68%, transparent);
-	background: transparent;
+	--button-fg: var(--md-sys-color-on-surface-variant);
+	--button-outline: transparent;
+	min-width: 2.5rem;
+	min-height: 2.75rem;
+	padding-inline: var(--space-2);
+	border-width: 0;
+	border-radius: var(--md-sys-shape-corner-full) 0 0 var(--md-sys-shape-corner-full);
+	font: var(--md-sys-typescale-label-medium);
 }
 
-.langOption.active {
-	background: Highlight;
-	color: HighlightText;
+.langOption + .langOption {
+	border-left: 1px solid var(--md-sys-color-outline);
+	border-radius: 0 var(--md-sys-shape-corner-full) var(--md-sys-shape-corner-full) 0;
 }
 
-/*
- * English labels are wider than the two-glyph Chinese ones, so the
- * language switch costs width that the rest of the shell has to give
- * back: 13px tab labels with tighter padding keep five tabs plus the pill
- * on one line at 360px, and the top-bar text buttons shrink so "Donate" /
- * "Refresh" cannot run into the nowrap h1.
- */
-html[lang="en"] .tab {
-	font-size: 12px;
-	padding: 0 4px;
-}
-
-html[lang="en"] .topbar {
-	gap: 8px;
-}
-
-html[lang="en"] .topTextButton {
-	min-width: 40px;
-	padding: 0 4px;
-	font-size: 12px;
+.langOption.active, .logTab.active {
+	--button-bg: var(--md-sys-color-secondary-container);
+	--button-fg: var(--md-sys-color-on-secondary-container);
 }
 
 main {
-	display: grid;
-	gap: 14px;
-	padding: 14px;
+	padding-block: var(--space-5);
 }
 
 .tabPanel {
 	display: none;
-	gap: 14px;
+	min-width: 0;
+	gap: var(--space-4);
 }
 
-.tabPanel.active {
+.tabPanel.active, .settingsShell {
 	display: grid;
+}
+
+.settingsShell {
+	min-width: 0;
+	gap: var(--space-4);
+}
+
+.settingsShell[hidden], .actions[hidden] {
+	display: none;
+}
+
+.settingsShell .langSwitch {
+	width: fit-content;
+	margin-inline-start: 0;
 }
 
 .summaryGrid {
 	display: grid;
-	grid-template-columns: repeat(2, 1fr);
-	gap: 10px;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-2);
+}
+
+.summaryTitle {
+	grid-column: 1 / -1;
+	padding-inline: var(--space-1);
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-label-large);
 }
 
 .metric {
+	--metric-bg: var(--md-sys-color-surface-container);
+	--metric-fg: var(--md-sys-color-on-surface);
+	--metric-label: var(--md-sys-color-on-surface-variant);
 	min-width: 0;
-	min-height: 72px;
-	padding: 12px;
-	border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
-	border-radius: 8px;
-	background: color-mix(in srgb, Canvas 94%, CanvasText 6%);
+	padding: var(--space-3) var(--space-4);
+	border-radius: var(--md-sys-shape-corner-large);
+	background: var(--metric-bg);
+	color: var(--metric-fg);
+}
+
+.metricEmphasis {
+	--metric-bg: var(--md-sys-color-primary-container);
+	--metric-fg: var(--md-sys-color-on-primary-container);
+	--metric-label: var(--md-sys-color-on-primary-container);
 }
 
 .metric span {
 	display: block;
-	margin-bottom: 6px;
-	font-size: 12px;
-	color: color-mix(in srgb, CanvasText 60%, transparent);
+	margin-bottom: var(--space-1);
+	color: var(--metric-label);
+	font: var(--md-sys-typescale-label-medium);
 }
 
 .metric strong {
 	display: block;
-	overflow-wrap: anywhere;
-	font-size: 18px;
-	font-weight: 650;
+	font: var(--md-sys-typescale-title-large);
+	font-variant-numeric: tabular-nums;
 }
 
 .panel {
 	min-width: 0;
-	padding: 14px;
-	border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
-	border-radius: 8px;
-	background: color-mix(in srgb, Canvas 94%, CanvasText 6%);
+	padding: var(--space-4);
+	border: 1px solid var(--md-sys-color-outline-variant);
+	border-radius: var(--md-sys-shape-corner-large);
+	background: var(--md-sys-color-surface-container-lowest);
 }
 
 .sectionTitle {
 	display: flex;
+	flex-wrap: wrap;
+	min-width: 0;
 	align-items: center;
 	justify-content: space-between;
-	gap: 12px;
-	margin-bottom: 12px;
-	min-width: 0;
+	gap: var(--space-2) var(--space-3);
+	margin-bottom: var(--space-3);
 }
 
 .sectionTitle > h2 {
-	min-width: 0;
-	overflow-wrap: anywhere;
+	min-width: min(100%, 6rem);
+	flex: 1;
 }
 
-.inlineControls,
-.buttonGrid,
-.logTabs,
-.pager {
+.inlineControls, .pager {
 	display: flex;
+	min-width: 0;
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-2);
+}
+
+.inlineControls {
+	justify-content: flex-end;
+}
+
+.stack, .buttonGrid, .logTabs {
+	display: grid;
+	gap: var(--space-2);
 }
 
 .buttonGrid {
-	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.stack {
+.pathRow, .pathRowHeader {
 	display: grid;
-	gap: 8px;
-}
-
-.pathRow,
-.pathRowHeader {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) 56px 32px 44px;
-	gap: 8px;
+	grid-template-columns: minmax(0, 1fr) minmax(3.5rem, 4.5rem) 3rem 3.75rem;
 	align-items: center;
+	gap: var(--space-2);
 }
 
 .pathRowHeader {
-	margin: 4px 0 6px;
-	font-size: 12px;
-	color: color-mix(in srgb, CanvasText 60%, transparent);
+	margin-block: var(--space-3) var(--space-2);
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-label-medium);
 }
 
-.pathRowHeader > span:nth-child(2),
-.pathRowHeader > span:nth-child(3) {
+.pathRowHeader > span:nth-child(2), .pathRowHeader > span:nth-child(3) {
 	text-align: center;
 }
 
-.pathRowGroup {
+.pathRowGroupField, .pathRowDirToggle {
 	min-width: 0;
-	width: 100%;
-	font-size: 12px;
+}
+
+.pathRowFieldLabel {
+	display: none;
+}
+
+.pathRow .pathRowGroup {
+	padding-inline: var(--space-2);
 	text-align: center;
-	padding: 8px 6px;
 }
 
 .pathRowDirToggle {
-	display: inline-flex;
+	display: flex;
+	min-height: var(--touch-target);
 	align-items: center;
 	justify-content: center;
-	padding: 0;
-	margin: 0;
+	gap: var(--space-2);
 	cursor: pointer;
-	user-select: none;
 }
 
-.pathRowDirToggle input[type="checkbox"] {
-	width: 18px;
-	height: 18px;
-	margin: 0;
+.pathRow button {
+	min-width: var(--touch-target);
+	padding-inline: var(--space-2);
 }
 
-input,
-textarea,
-button {
-	font: inherit;
-}
-
-input[type="text"],
-input[type="search"],
-input[type="number"],
-textarea {
+input[type="text"], input[type="search"], input[type="number"], textarea {
+	min-width: 0;
 	width: 100%;
-	border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
-	border-radius: 6px;
-	padding: 10px 11px;
-	color: CanvasText;
-	background: Canvas;
+	min-height: 2.75rem;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--md-sys-color-outline);
+	border-radius: var(--md-sys-shape-corner-extra-small);
+	background: var(--md-sys-color-surface-container-lowest);
+	color: var(--md-sys-color-on-surface);
 }
 
-.switchRow input[type="number"] {
-	width: 110px;
-	text-align: right;
+input::placeholder, textarea::placeholder {
+	color: var(--md-sys-color-on-surface-variant);
+	opacity: 1;
+}
+
+input:disabled, textarea:disabled {
+	background: var(--md-sys-color-surface-container-high);
+	color: var(--md-sys-color-on-surface-variant);
+}
+
+.pathRowPath, .pathRowGroup {
+	font: .8125rem / 1.4 var(--font-mono);
 }
 
 textarea {
+	min-height: 5.5rem;
 	resize: vertical;
-	min-height: 88px;
-}
-
-button {
-	min-height: 40px;
-	border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
-	border-radius: 6px;
-	padding: 0 12px;
-	color: CanvasText;
-	background: color-mix(in srgb, Canvas 88%, CanvasText 12%);
-}
-
-button:disabled {
-	opacity: .52;
-}
-
-button:active {
-	transform: translateY(1px);
 }
 
 .segmented {
 	display: grid;
-	grid-template-columns: repeat(3, 1fr);
-	border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
-	border-radius: 8px;
-	overflow: hidden;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	border: 1px solid var(--md-sys-color-outline);
+	border-radius: var(--md-sys-shape-corner-full);
 }
 
 .segmented label {
 	position: relative;
-	display: grid;
-	place-items: center;
-	min-height: 42px;
+	min-width: 0;
+	cursor: pointer;
+}
+
+.segmented label + label {
+	border-left: 1px solid var(--md-sys-color-outline);
 }
 
 .segmented input {
 	position: absolute;
-	opacity: 0;
-}
-
-.segmented span {
+	inset: 0;
 	width: 100%;
 	height: 100%;
+	margin: 0;
+	opacity: 0;
+	cursor: inherit;
+}
+
+.segmented label span {
 	display: grid;
+	height: 100%;
+	min-height: var(--touch-target);
 	place-items: center;
+	padding: var(--space-1) var(--space-2);
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-label-large);
+	text-align: center;
+}
+
+.segmented label:first-child span {
+	border-radius: var(--md-sys-shape-corner-full) 0 0 var(--md-sys-shape-corner-full);
+}
+
+.segmented label:last-child span {
+	border-radius: 0 var(--md-sys-shape-corner-full) var(--md-sys-shape-corner-full) 0;
 }
 
 .segmented input:checked + span {
-	background: color-mix(in srgb, Highlight 28%, Canvas);
-	color: CanvasText;
+	background: var(--md-sys-color-secondary-container);
+	color: var(--md-sys-color-on-secondary-container);
+	font-weight: 700;
 }
 
-.switchRow,
-.miniToggle {
+.segmented input:focus-visible + span {
+	outline: 2px solid var(--md-sys-color-primary);
+	outline-offset: -3px;
+}
+
+.switchRow, .miniToggle {
 	display: flex;
+	min-width: 0;
+	min-height: var(--touch-target);
 	align-items: center;
 	justify-content: space-between;
-	gap: 10px;
-	margin-top: 12px;
+	gap: var(--space-3);
 }
 
-.miniToggle {
-	margin: 0;
-	font-size: 13px;
-}
-
-.hint {
-	margin: 8px 0 0;
-	color: color-mix(in srgb, CanvasText 65%, transparent);
-	font-size: 12px;
-	line-height: 1.5;
-}
-
-.switchRow .hint {
-	display: block;
-	margin-top: 4px;
-	font-weight: normal;
+.switchRow {
+	margin-top: var(--space-3);
 }
 
 .switchRow > span:first-child {
-	display: flex;
-	flex-direction: column;
-	gap: 0;
+	min-width: 0;
+	font: var(--md-sys-typescale-body-medium);
+}
+
+.switchRow input[type="number"] {
+	flex: 0 0 5.5rem;
+	width: 5.5rem;
+	text-align: end;
+}
+
+.switchRow input[type="checkbox"] {
+	display: inline-flex;
+	width: 3.25rem;
+	height: 2rem;
+	align-items: center;
+	appearance: none;
+	-webkit-appearance: none;
+	border: 2px solid var(--md-sys-color-outline);
+	border-radius: var(--md-sys-shape-corner-full);
+	background: var(--md-sys-color-surface-container-highest);
+	cursor: pointer;
+}
+
+.switchRow input[type="checkbox"]::before {
+	width: 1rem;
+	height: 1rem;
+	margin-inline-start: .375rem;
+	border-radius: var(--md-sys-shape-corner-full);
+	background: var(--md-sys-color-outline);
+	content: "";
+}
+
+.switchRow input[type="checkbox"]:checked {
+	justify-content: flex-end;
+	border-color: var(--md-sys-color-primary);
+	background: var(--md-sys-color-primary);
+}
+
+.switchRow input[type="checkbox"]:checked::before {
+	width: 1.5rem;
+	height: 1.5rem;
+	margin-inline: 0 .125rem;
+	background: var(--md-sys-color-on-primary);
+}
+
+.switchRow input[type="checkbox"]:disabled {
+	cursor: default;
+	opacity: .54;
+}
+
+.miniToggle {
+	justify-content: flex-start;
+	gap: var(--space-2);
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-body-small);
+	cursor: pointer;
+}
+
+.hint {
+	display: block;
+	margin-top: var(--space-2);
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-body-small);
+}
+
+.switchRow .hint {
+	margin-top: var(--space-1);
 }
 
 .autoSceneRow {
-	margin: 2px 0 8px;
+	margin-block: 0 var(--space-3);
 }
 
 .autoSceneRow > span:first-child {
-	min-width: 0;
-	font-weight: 600;
-}
-
-.autoSceneRow .hint {
-	max-width: 100%;
-	font-weight: normal;
-	overflow-wrap: anywhere;
-}
-
-.search {
-	margin-bottom: 10px;
+	font: var(--md-sys-typescale-label-large);
 }
 
 .appListCount {
-	margin-bottom: 8px;
+	margin-bottom: var(--space-2);
 }
 
 .appList {
 	display: grid;
-	max-height: 340px;
+	max-height: 21.25rem;
+	min-width: 0;
 	overflow: auto;
-	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
-	border-radius: 8px;
+	scroll-padding-block: var(--space-2);
+	border: 1px solid var(--md-sys-color-outline-variant);
+	border-radius: var(--md-sys-shape-corner-medium);
+	background: var(--md-sys-color-surface-container-low);
+}
+
+.appList:empty {
+	display: none;
 }
 
 .appRow {
 	display: grid;
-	grid-template-columns: 24px minmax(0, 1fr) auto;
+	grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+	min-height: var(--touch-target);
+	min-width: 0;
 	align-items: center;
-	gap: 10px;
-	min-height: 44px;
-	padding: 8px 10px;
-	border-bottom: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
+	gap: var(--space-3);
+	padding: var(--space-2) var(--space-3);
+	border-bottom: 1px solid var(--md-sys-color-outline-variant);
+	cursor: pointer;
 }
 
 .appRow.selected {
-	background: color-mix(in srgb, #26a269 10%, Canvas);
+	background: var(--md-sys-color-secondary-container);
+	color: var(--md-sys-color-on-secondary-container);
 }
 
 .appRow:last-child {
@@ -520,254 +662,174 @@ button:active {
 }
 
 .pkg {
-	display: flex;
-	flex-direction: column;
-	gap: 1px;
+	display: grid;
 	min-width: 0;
-	overflow-wrap: anywhere;
-	font-size: 14px;
+	font: var(--md-sys-typescale-body-medium);
 }
 
-/* The manager's appLabel, when the native package API supplies one. */
-.pkgLabel {
-	color: color-mix(in srgb, CanvasText 58%, transparent);
-	font-size: 12px;
-	line-height: 1.3;
+.pkgLabel, .uid, .pager span {
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-body-small);
 }
 
-.uid {
-	font-size: 12px;
-	color: color-mix(in srgb, CanvasText 58%, transparent);
+.uid, .pager span {
+	font-variant-numeric: tabular-nums;
 }
 
 .healthList {
 	display: grid;
-	gap: 8px;
+	gap: var(--space-2);
 	margin: 0;
 	padding: 0;
 	list-style: none;
 }
 
 .healthItem {
+	--health-indicator: var(--md-sys-color-outline-variant);
 	min-width: 0;
-	padding: 10px 11px;
-	border-radius: 7px;
-	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
-	background: Canvas;
+	padding: var(--space-3);
+	border: 1px solid var(--md-sys-color-outline-variant);
+	border-inline-start: 3px solid var(--health-indicator);
+	border-radius: var(--md-sys-shape-corner-medium);
+	background: var(--md-sys-color-surface-container-low);
 }
 
 .healthItem.ok {
-	border-color: color-mix(in srgb, #26a269 44%, transparent);
+	--health-indicator: var(--status-success);
 }
 
 .healthItem.warn {
-	border-color: color-mix(in srgb, #e5a50a 58%, transparent);
+	--health-indicator: var(--status-warning);
 }
 
 .healthItem.bad {
-	border-color: color-mix(in srgb, #c01c28 56%, transparent);
+	--health-indicator: var(--md-sys-color-error);
 }
 
 .healthItem strong {
 	display: block;
-	margin-bottom: 4px;
-	font-size: 14px;
-	overflow-wrap: anywhere;
+	margin-bottom: var(--space-1);
+	font: var(--md-sys-typescale-label-large);
 }
 
 .healthItem span {
 	display: block;
-	font-size: 13px;
-	color: color-mix(in srgb, CanvasText 68%, transparent);
-	overflow-wrap: anywhere;
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-body-small);
 	white-space: pre-wrap;
 }
 
 .monoBox {
-	font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-	font-size: 12px;
-	line-height: 1.45;
-	white-space: pre;
 	max-width: 100%;
 	overflow: auto;
+	background: var(--md-sys-color-surface-container-low);
+	font: .75rem / 1.5 var(--font-mono);
+	white-space: pre;
 }
 
 .logTabs {
-	display: grid;
-	grid-template-columns: repeat(4, 1fr);
-	margin-bottom: 10px;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	margin-bottom: var(--space-3);
+}
+
+.logTab {
+	padding-inline: var(--space-1);
 }
 
 .pager {
 	justify-content: space-between;
-	margin-top: 10px;
-}
-
-.pager span {
-	font-size: 13px;
-	color: color-mix(in srgb, CanvasText 66%, transparent);
+	margin-top: var(--space-3);
 }
 
 .actions {
 	position: fixed;
-	left: 0;
-	right: 0;
-	bottom: 0;
+	z-index: 19;
+	inset: auto 0 calc(var(--glass-dock-height) + var(--glass-dock-bottom) + var(--space-2));
+	border-top: 1px solid var(--md-sys-color-outline-variant);
+	background: var(--md-sys-color-surface-container);
+}
+
+.actionsInner {
 	display: grid;
-	grid-template-columns: 1fr 1fr 1.25fr;
-	gap: 10px;
-	padding: 12px 14px 16px;
-	background: color-mix(in srgb, Canvas 90%, CanvasText 10%);
-	border-top: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr);
+	gap: var(--space-2);
+	padding-block: var(--space-2);
 }
 
-.actions .primary {
-	background: Highlight;
-	color: HighlightText;
-	border-color: Highlight;
-}
-
-/*
- * Grid children default to min-width:auto, so a long label ("Save &
- * reload" at a large system font scale) could not shrink and pushed the
- * footer past its measured height, covering the last panel's controls.
- * Letting the buttons shrink and wrap their labels keeps the row on one
- * line and the measured --actions-h honest.
- */
 .actions button {
-	min-width: 0;
-	overflow-wrap: anywhere;
+	padding-inline: var(--space-2);
 }
 
 .toast {
 	position: fixed;
-	left: 14px;
-	right: 14px;
-	bottom: 90px;
-	padding: 12px 14px;
-	border-radius: 8px;
-	background: color-mix(in srgb, CanvasText 86%, Canvas);
-	color: Canvas;
-	box-shadow: 0 8px 28px rgba(0, 0, 0, .24);
 	z-index: 30;
-	overflow-wrap: anywhere;
-	word-break: break-word;
-}
-
-@media (min-width: 760px) {
-	main,
-	.tabs {
-		max-width: 900px;
-		margin: 0 auto;
-	}
-
-	.summaryGrid {
-		grid-template-columns: repeat(4, 1fr);
-	}
-
-	.topbar {
-		padding-left: max(18px, calc((100vw - 900px) / 2));
-		padding-right: max(18px, calc((100vw - 900px) / 2));
-	}
-
-	.actions {
-		left: 50%;
-		width: min(900px, calc(100vw - 28px));
-		transform: translateX(-50%);
-		border: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
-		border-bottom: 0;
-		border-radius: 8px 8px 0 0;
-	}
-}
-
-.sectionTitle .iconButton {
-	width: 32px;
-	height: 32px;
-	border-radius: 5px;
-}
-
-.sectionTitle .iconButton svg {
-	width: 16px;
-	height: 16px;
+	inset: auto var(--gutter) calc(var(--actions-h, 0px) + var(--glass-dock-clearance));
+	width: auto;
+	max-width: 32rem;
+	margin-inline: auto;
+	padding: var(--space-3) var(--space-4);
+	border-radius: var(--md-sys-shape-corner-small);
+	background: var(--md-sys-color-inverse-surface);
+	color: var(--md-sys-color-inverse-on-surface);
+	font: var(--md-sys-typescale-body-medium);
 }
 
 .modal {
 	position: fixed;
-	inset: 0;
 	z-index: 50;
+	inset: 0;
 	display: grid;
 	place-items: center;
-	padding: 24px 16px;
+	padding: var(--space-4);
 }
 
-/*
- * The HTML `hidden` attribute is normally `display: none`, but any
- * explicit `display` rule (like our `display: grid` above) wins over
- * the user-agent's default for `[hidden]`. Without this rule the
- * modal would show on page load and ignore the JS-side `.hidden =
- * true` toggle. Targeting `.modal[hidden]` keeps the override
- * scoped, so it doesn't accidentally affect any future hidden
- * elements that legitimately need a different `display` mode when
- * shown.
- */
-.modal[hidden] {
+.modal[hidden], .toast[hidden], .hint[hidden], .verdictBox[hidden] {
 	display: none;
 }
 
 .modalBackdrop {
 	position: absolute;
 	inset: 0;
-	background: rgba(0, 0, 0, 0.45);
+	background: var(--md-sys-color-scrim);
 }
 
 .modalCard {
 	position: relative;
-	width: min(640px, 100%);
-	max-height: calc(100vh - 48px);
 	display: flex;
+	width: min(40rem, 100%);
+	max-height: calc(100vh - 2rem);
+	max-height: calc(100dvh - 2rem);
 	flex-direction: column;
-	border-radius: 12px;
-	background: Canvas;
-	color: CanvasText;
-	box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
-	overflow: hidden;
+	border-radius: var(--md-sys-shape-corner-extra-large);
+	background: var(--md-sys-color-surface-container-high);
+	color: var(--md-sys-color-on-surface);
 }
 
 .modalHeader {
 	display: flex;
+	flex: none;
 	align-items: center;
 	justify-content: space-between;
-	padding: 14px 16px;
-	gap: 8px;
-	border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+	gap: var(--space-2);
+	padding: var(--space-3) var(--space-4) var(--space-2) var(--space-6);
 }
 
 .modalHeader h2 {
-	font-size: 16px;
-	margin: 0;
-}
-
-.modalHeader .iconButton {
-	width: 32px;
-	height: 32px;
-}
-
-.modalHeader .iconButton svg {
-	width: 16px;
-	height: 16px;
+	font: var(--md-sys-typescale-title-large);
 }
 
 .modalBody {
+	min-height: 0;
 	overflow-y: auto;
-	padding: 14px 16px 18px;
-	font-size: 14px;
-	line-height: 1.6;
+	padding: var(--space-2) var(--space-6) var(--space-6);
+	border-radius: 0 0 var(--md-sys-shape-corner-extra-large) var(--md-sys-shape-corner-extra-large);
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-body-medium);
 }
 
 .modalBody h3 {
-	font-size: 14px;
-	margin: 14px 0 6px;
-	color: color-mix(in srgb, CanvasText 92%, transparent);
+	margin-block: var(--space-3) var(--space-1);
+	color: var(--md-sys-color-on-surface);
 }
 
 .modalBody h3:first-child {
@@ -775,24 +837,22 @@ button:active {
 }
 
 .modalBody p {
-	margin: 0 0 8px;
-	color: color-mix(in srgb, CanvasText 78%, transparent);
-	overflow-wrap: anywhere;
+	margin-bottom: var(--space-2);
 }
 
 .modalBody code {
-	padding: 1px 5px;
-	border-radius: 4px;
-	font-size: 12px;
-	background: color-mix(in srgb, CanvasText 10%, transparent);
+	padding: 1px var(--space-1);
+	border-radius: var(--md-sys-shape-corner-extra-small);
+	background: var(--md-sys-color-surface-container-highest);
+	font: .75rem / 1.5 var(--font-mono);
 }
 
 .modalBody strong {
-	color: CanvasText;
+	color: var(--md-sys-color-on-surface);
 }
 
 .donateCard {
-	width: min(600px, 100%);
+	width: min(32rem, 100%);
 }
 
 .donateBody {
@@ -803,27 +863,30 @@ button:active {
 	display: block;
 	width: 100%;
 	height: auto;
-	margin: 12px auto 8px;
-	border-radius: 10px;
-	background: #fff;
-}
-
-.donateBody .hint {
-	margin-top: 8px;
+	margin: var(--space-3) auto var(--space-2);
+	border-radius: var(--md-sys-shape-corner-medium);
+	background: var(--qr-paper);
 }
 
 .subPanel {
-	margin-top: 6px;
-	padding: 10px 12px;
-	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
-	border-radius: 8px;
-	background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+	margin-top: var(--space-2);
+	padding-inline: var(--space-3);
+	border: 1px solid var(--md-sys-color-outline-variant);
+	border-radius: var(--md-sys-shape-corner-medium);
+	background: var(--md-sys-color-surface-container-low);
+}
+
+.subPanel[open] {
+	padding-bottom: var(--space-3);
 }
 
 .subPanel summary {
+	display: flex;
+	min-height: var(--touch-target);
+	align-items: center;
+	gap: var(--space-2);
+	font: var(--md-sys-typescale-label-large);
 	cursor: pointer;
-	font-size: 13px;
-	font-weight: 600;
 	user-select: none;
 	list-style: none;
 }
@@ -833,154 +896,219 @@ button:active {
 }
 
 .subPanel summary::before {
-	content: "▸";
-	display: inline-block;
-	width: 14px;
-	margin-right: 4px;
-	color: color-mix(in srgb, CanvasText 50%, transparent);
-	transition: transform 120ms ease-in-out;
+	width: .5rem;
+	height: .5rem;
+	flex: none;
+	margin-inline: var(--space-1);
+	border-right: 2px solid var(--md-sys-color-on-surface-variant);
+	border-bottom: 2px solid var(--md-sys-color-on-surface-variant);
+	transform: rotate(-45deg);
+	transition: transform var(--md-sys-motion-short) var(--md-sys-motion-standard);
+	content: "";
 }
 
 .subPanel[open] summary::before {
-	transform: rotate(90deg);
+	transform: rotate(45deg);
 }
 
-.subPanel.disabled {
-	opacity: 0.55;
-}
-
-.subPanel > .hint {
-	margin-top: 8px;
+.subPanel.disabled summary {
+	color: var(--md-sys-color-on-surface-variant);
 }
 
 .syscallList {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
-	gap: 6px 12px;
-	margin-top: 10px;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-1) var(--space-3);
+	margin-top: var(--space-2);
 }
 
-@media (max-width: 480px) {
+.syscallRow {
+	display: flex;
+	min-height: var(--touch-target);
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-2);
+	border-radius: var(--md-sys-shape-corner-small);
+	font: var(--md-sys-typescale-body-medium);
+	cursor: pointer;
+}
+
+.syscallRow > span {
+	display: grid;
+	min-width: 0;
+}
+
+.syscallRow small {
+	color: var(--md-sys-color-on-surface-variant);
+	font: var(--md-sys-typescale-body-small);
+}
+
+.syscallRow em {
+	color: var(--md-sys-color-error);
+	font: var(--md-sys-typescale-label-medium);
+}
+
+.verdictBox {
+	--verdict-bg: var(--md-sys-color-surface-container-high);
+	--verdict-fg: var(--md-sys-color-on-surface);
+	display: grid;
+	gap: var(--space-2);
+	margin-block: var(--space-2) var(--space-3);
+	padding: var(--space-4);
+	border-radius: var(--md-sys-shape-corner-large);
+	background: var(--verdict-bg);
+	color: var(--verdict-fg);
+}
+
+.verdictBox[data-level="ok"] {
+	--verdict-bg: var(--status-success-container);
+	--verdict-fg: var(--status-on-success-container);
+}
+
+.verdictBox[data-level="warn"] {
+	--verdict-bg: var(--status-warning-container);
+	--verdict-fg: var(--status-on-warning-container);
+}
+
+.verdictBox[data-level="bad"] {
+	--verdict-bg: var(--md-sys-color-error-container);
+	--verdict-fg: var(--md-sys-color-on-error-container);
+}
+
+.verdictBox[data-level="info"] {
+	--verdict-bg: var(--md-sys-color-primary-container);
+	--verdict-fg: var(--md-sys-color-on-primary-container);
+}
+
+.verdictHead {
+	font: var(--md-sys-typescale-title-medium);
+}
+
+.verdictSuggestions {
+	display: grid;
+	gap: var(--space-1);
+	margin: 0;
+	padding-inline-start: var(--space-5);
+	font: var(--md-sys-typescale-body-medium);
+}
+
+.historyItem {
+	min-height: var(--touch-target);
+	cursor: pointer;
+}
+
+.historyItem.active {
+	--health-indicator: var(--md-sys-color-primary);
+	background: var(--md-sys-color-secondary-container);
+}
+
+@media (hover: hover) {
+	.syscallRow:hover, .historyItem:not(.active):hover {
+		background: var(--md-sys-color-surface-container);
+	}
+}
+
+@media (max-width: 36rem) {
+	.topTextButton {
+		position: relative;
+		width: var(--touch-target);
+		padding: 0;
+	}
+
+	/* Keep a text name for the compact icon-only controls. */
+	.topTextButton span {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+
+	.pathRowHeader {
+		display: none;
+	}
+
+	.pathRow {
+		grid-template-columns: minmax(0, 1fr) auto auto;
+		padding: var(--space-2);
+		border-radius: var(--md-sys-shape-corner-medium);
+		background: var(--md-sys-color-surface-container-low);
+	}
+
+	.pathRowPath {
+		grid-column: 1 / -1;
+	}
+
+	.pathRowGroupField {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+
+	.pathRow .pathRowGroup {
+		width: min(100%, 5.5rem);
+	}
+
+	.pathRowFieldLabel {
+		display: inline;
+		color: var(--md-sys-color-on-surface-variant);
+		font: var(--md-sys-typescale-label-medium);
+	}
+
 	.syscallList {
 		grid-template-columns: 1fr;
 	}
 }
 
-.syscallRow {
-	display: flex;
-	align-items: flex-start;
-	gap: 8px;
-	padding: 6px 8px;
-	border-radius: 6px;
-	font-size: 13px;
-	cursor: pointer;
-}
+@media (min-width: 42rem) {
+	.summaryGrid {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: var(--space-3);
+	}
 
-.syscallRow:hover {
-	background: color-mix(in srgb, CanvasText 6%, transparent);
-}
+	.panel {
+		padding: var(--space-5);
+	}
 
-.syscallRow input {
-	margin-top: 2px;
-}
+	.actionsInner {
+		grid-template-columns: repeat(3, minmax(0, auto));
+		justify-content: end;
+	}
 
-.syscallRow > span {
-	display: flex;
-	flex-direction: column;
-	gap: 0;
-}
-
-.syscallRow small {
-	color: color-mix(in srgb, CanvasText 55%, transparent);
-	font-size: 11px;
-	line-height: 1.3;
-}
-
-.syscallRow em {
-	font-style: normal;
-	color: #c43;
-	font-size: 11px;
-	margin-left: 4px;
-}
-
-
-.verdictBox {
-	margin: 8px 0 4px;
-	padding: 12px 14px;
-	border-radius: 10px;
-	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
-	background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-}
-
-.verdictBox[data-level="ok"] {
-	background: color-mix(in srgb, #4caf50 14%, Canvas);
-	border-color: color-mix(in srgb, #4caf50 35%, transparent);
-}
-
-.verdictBox[data-level="warn"] {
-	background: color-mix(in srgb, #ff9800 18%, Canvas);
-	border-color: color-mix(in srgb, #ff9800 40%, transparent);
-}
-
-.verdictBox[data-level="bad"] {
-	background: color-mix(in srgb, #c01c28 16%, Canvas);
-	border-color: color-mix(in srgb, #c01c28 40%, transparent);
-}
-
-.verdictBox[data-level="info"] {
-	background: color-mix(in srgb, #2196f3 14%, Canvas);
-	border-color: color-mix(in srgb, #2196f3 35%, transparent);
-}
-
-.verdictBox .verdictHead {
-	font-size: 15px;
-	font-weight: 600;
-	line-height: 1.3;
-}
-
-.verdictBox .verdictSuggestions {
-	margin: 0;
-	padding-left: 22px;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	font-size: 13px;
-	line-height: 1.5;
-}
-
-
-.historyItem {
-	cursor: pointer;
-	padding: 6px 10px;
-	border-radius: 6px;
-	border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
-}
-
-.historyItem:hover {
-	background: color-mix(in srgb, CanvasText 6%, transparent);
-}
-
-/*
- * The previous rule was `.historyItem:hover, .historyItem:focus {
- * outline: none }`. These items are keyboard operable (tabIndex=0 plus
- * an Enter/Space handler), so suppressing the outline removed the only
- * indication of which snapshot was focused. Keep the subtle hover wash
- * but let the global :focus-visible ring through.
- */
-.historyItem.active {
-	background: color-mix(in srgb, #2196f3 18%, Canvas);
-	border-color: color-mix(in srgb, #2196f3 50%, transparent);
+	.actions button {
+		padding-inline: var(--space-4);
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
-	button:active {
-		transform: none;
+	button, .iconButton, .subPanel summary::before {
+		transition: none;
+	}
+}
+
+@media (forced-colors: active) {
+	:focus-visible, .segmented input:focus-visible + span {
+		outline-color: Highlight;
 	}
 
-	.subPanel summary::before {
-		transition: none;
+	.tab.active::after {
+		background: Highlight;
+		forced-color-adjust: none;
+	}
+
+	.segmented input:checked + span, .langOption.active, .logTab.active {
+		outline: 1px solid Highlight;
+		outline-offset: -2px;
+	}
+
+	.switchRow input[type="checkbox"], .switchRow input[type="checkbox"]:checked {
+		width: 1.25rem;
+		height: 1.25rem;
+		appearance: auto;
+	}
+
+	.switchRow input[type="checkbox"]::before {
+		content: none;
 	}
 }
