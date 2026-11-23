@@ -1,0 +1,13 @@
+{
+  "name": "pathmask-webui-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Static and headless checks for the KernelSU WebUI in ksu-module/webroot",
+  "type": "module",
+  "scripts": {
+    "test": "node i18n.test.mjs && node smoke.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}

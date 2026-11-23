@@ -23,12 +23,14 @@
 		</div>
 	</header>
 
-	<nav class="tabs" aria-label="页面" data-i18n-aria-label>
-		<button class="tab active" type="button" data-tab="config" data-i18n>遮罩</button>
-		<button class="tab" type="button" data-tab="procguard" data-i18n>防护</button>
-		<button class="tab" type="button" data-tab="diagnosis" data-i18n>诊断</button>
-		<button class="tab" type="button" data-tab="logs" data-i18n>日志</button>
-		<button class="tab" type="button" data-tab="report" data-i18n>报告</button>
+	<nav class="tabs">
+		<div class="tabGroup" role="tablist" aria-label="页面" data-i18n-aria-label>
+			<button class="tab active" role="tab" id="tab-config" aria-controls="configPanel" aria-selected="true" tabindex="0" type="button" data-tab="config" data-i18n>遮罩</button>
+			<button class="tab" role="tab" id="tab-procguard" aria-controls="procguardPanel" aria-selected="false" tabindex="-1" type="button" data-tab="procguard" data-i18n>防护</button>
+			<button class="tab" role="tab" id="tab-diagnosis" aria-controls="diagnosisPanel" aria-selected="false" tabindex="-1" type="button" data-tab="diagnosis" data-i18n>诊断</button>
+			<button class="tab" role="tab" id="tab-logs" aria-controls="logsPanel" aria-selected="false" tabindex="-1" type="button" data-tab="logs" data-i18n>日志</button>
+			<button class="tab" role="tab" id="tab-report" aria-controls="reportPanel" aria-selected="false" tabindex="-1" type="button" data-tab="report" data-i18n>报告</button>
+		</div>
 		<div class="langSwitch" role="group" aria-label="界面语言" data-i18n-aria-label>
 			<button class="langOption active" type="button" data-lang="zh" lang="zh-CN" aria-label="中文界面" data-i18n-aria-label>中</button>
 			<button class="langOption" type="button" data-lang="en" lang="en" aria-label="英文界面" data-i18n-aria-label>EN</button>
@@ -36,7 +38,7 @@
 	</nav>
 
 	<main>
-		<section id="configPanel" class="tabPanel active">
+		<section id="configPanel" class="tabPanel active" role="tabpanel" aria-labelledby="tab-config" tabindex="0">
 			<section class="summaryGrid" aria-label="状态总览" data-i18n-aria-label>
 				<div class="metric">
 					<span data-i18n>模块状态</span>
@@ -149,6 +151,7 @@
 				</div>
 				<input id="searchInput" class="search" type="search" placeholder="搜索包名" data-i18n-placeholder>
 				<p id="scopeListHint" class="hint" data-i18n>黑名单模式：勾选的应用会看不到隐藏路径。</p>
+				<p id="appListCount" class="hint appListCount" aria-live="polite"></p>
 				<div id="appList" class="appList"></div>
 			</section>
 
@@ -182,7 +185,7 @@
 			</section>
 		</section>
 
-		<section id="procguardPanel" class="tabPanel">
+		<section id="procguardPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-procguard" tabindex="0">
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>隔离防护</h2>
@@ -241,7 +244,7 @@
 			</section>
 		</section>
 
-		<section id="diagnosisPanel" class="tabPanel">
+		<section id="diagnosisPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-diagnosis" tabindex="0">
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>结论</h2>
@@ -266,19 +269,19 @@
 			</section>
 		</section>
 
-		<section id="logsPanel" class="tabPanel">
+		<section id="logsPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-logs" tabindex="0">
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>日志分页</h2>
 					<button id="refreshLogsBtn" type="button" data-i18n>刷新日志</button>
 				</div>
-				<div class="logTabs">
-					<button class="logTab active" type="button" data-log="status" data-i18n>状态</button>
-					<button class="logTab" type="button" data-log="config" data-i18n>配置</button>
-					<button class="logTab" type="button" data-log="kernel" data-i18n>内核</button>
-					<button class="logTab" type="button" data-log="script" data-i18n>脚本</button>
+				<div class="logTabs" role="group" aria-label="日志类别" data-i18n-aria-label>
+					<button class="logTab active" type="button" aria-pressed="true" data-log="status" data-i18n>状态</button>
+					<button class="logTab" type="button" aria-pressed="false" data-log="config" data-i18n>配置</button>
+					<button class="logTab" type="button" aria-pressed="false" data-log="kernel" data-i18n>内核</button>
+					<button class="logTab" type="button" aria-pressed="false" data-log="script" data-i18n>脚本</button>
 				</div>
-				<textarea id="logOutput" class="monoBox" rows="16" readonly></textarea>
+				<textarea id="logOutput" class="monoBox" rows="16" readonly aria-label="日志内容" data-i18n-aria-label></textarea>
 				<div class="pager">
 					<button id="prevLogBtn" type="button" data-i18n>上一页</button>
 					<span id="logPageInfo">0 / 0</span>
@@ -287,7 +290,7 @@
 			</section>
 		</section>
 
-		<section id="reportPanel" class="tabPanel">
+		<section id="reportPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-report" tabindex="0">
 			<section class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>诊断报告</h2>
@@ -304,7 +307,7 @@
 		<button id="reloadBtn" class="primary" type="button" data-i18n>保存并热重载</button>
 	</footer>
 
-	<div id="toast" class="toast" hidden></div>
+	<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 	<div id="donateModal" class="modal" hidden>
 		<div class="modalBackdrop" data-modal-close="donateModal"></div>
@@ -385,14 +388,21 @@
 		// (or runtime error before app.js wires its own handlers) lands
 		// here. Writes the error to #statusText so the WebUI never
 		// silently freezes on the HTML default again.
+		//
+		// This listener is registered in the capture phase, which is
+		// also how failed resource loads (<img>, <script>, <link>)
+		// reach window. Those events carry no `message`, only a
+		// `filename` pointing at the asset, so without the guard below
+		// a single missing image would overwrite an otherwise healthy
+		// status line with a bogus "script error".
 		window.addEventListener("error", function(e) {
+			if (!e || typeof e.message !== "string" || !e.message) return;
 			var s = document.getElementById("statusText");
 			if (!s) return;
-			var msg = (e && e.message) ? e.message : "脚本错误";
-			var loc = (e && e.filename)
+			var loc = (e.filename)
 				? " @ " + e.filename.replace(/^.*\//, "") + ":" + e.lineno
 				: "";
-			s.textContent = "脚本错误：" + msg + loc;
+			s.textContent = "脚本错误：" + e.message + loc;
 			s.style.color = "#c01c28";
 		}, true);
 	</script>
