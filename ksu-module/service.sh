@@ -761,11 +761,13 @@ package_to_uid_from_data_dir() {
 
 package_to_uid_from_pm() {
 	PACKAGE_NAME="$1"
+	# stdin is /dev/null so a caller's config-file descriptor cannot reach
+	# the package service; with one inherited these calls fail outright.
 	PACKAGE_LINES="$(
-		cmd package list packages --user 0 -U "$PACKAGE_NAME" 2>/dev/null || true
-		pm list packages --user 0 -U "$PACKAGE_NAME" 2>/dev/null || true
-		cmd package list packages -U "$PACKAGE_NAME" 2>/dev/null || true
-		pm list packages -U "$PACKAGE_NAME" 2>/dev/null || true
+		cmd package list packages --user 0 -U "$PACKAGE_NAME" 2>/dev/null < /dev/null || true
+		pm list packages --user 0 -U "$PACKAGE_NAME" 2>/dev/null < /dev/null || true
+		cmd package list packages -U "$PACKAGE_NAME" 2>/dev/null < /dev/null || true
+		pm list packages -U "$PACKAGE_NAME" 2>/dev/null < /dev/null || true
 	)"
 
 	printf '%s\n' "$PACKAGE_LINES" |

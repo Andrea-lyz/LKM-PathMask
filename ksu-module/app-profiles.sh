@@ -12,9 +12,14 @@ pm_legacy_scope_resolved() {
 	esac
 }
 
+# The package commands must not inherit a /data/adb file descriptor:
+# with stdin or stdout pointing at one, they fail with
+# "Failure calling service package: Failed transaction" on at least one
+# Android 17 build. stdin is therefore /dev/null and stdout is captured by
+# the caller through a pipe.
 pm_inventory_for_user() {
-	cmd package list packages --user "$1" -U 2>/dev/null ||
-		pm list packages --user "$1" -U 2>/dev/null
+	cmd package list packages --user "$1" -U 2>/dev/null < /dev/null ||
+		pm list packages --user "$1" -U 2>/dev/null < /dev/null
 }
 
 # Refuse non-unique package ownership, unknown users and non-ordinary app IDs.
@@ -94,7 +99,13 @@ pm_compile_app_profiles() {
 		if [ "$APP_PROFILE_KEY" != "$APP_PROFILE_LAST" ]; then
 			APP_PROFILE_ERROR="cannot verify UID ownership for $APP_PROFILE_KEY"
 			if [ ! -f "$APP_PROFILE_INVENTORY" ]; then
-				pm_inventory_for_user "$APP_PROFILE_USER" > "$APP_PROFILE_INVENTORY" || return 1
+				# Capture through a pipe and let this shell write the file.
+				# Redirecting the package command's stdout straight into a
+				# file under /data/adb makes it fail with
+				# "Failure calling service package: Failed transaction".
+				APP_PROFILE_INVENTORY_TEXT=$(pm_inventory_for_user "$APP_PROFILE_USER") || return 1
+				printf '%s\n' "$APP_PROFILE_INVENTORY_TEXT" > "$APP_PROFILE_INVENTORY" || return 1
+				unset APP_PROFILE_INVENTORY_TEXT
 			fi
 			APP_PROFILE_UID=$(pm_resolve_profile_uid "$APP_PROFILE_USER" "$APP_PROFILE_PKG" "$APP_PROFILE_INVENTORY") || return 1
 			APP_PROFILE_LAST="$APP_PROFILE_KEY"
