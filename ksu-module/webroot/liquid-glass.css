@@ -1,0 +1,199 @@
+:root {
+	--glass-dock-height: 68px;
+	--glass-dock-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+	--glass-dock-clearance: calc(var(--glass-dock-height) + var(--glass-dock-bottom) + 16px);
+}
+
+.liquidGlass {
+	--tint-rgb: 255 255 255;
+	--tint-a: .4;
+	--dock-tint-a: .32;
+	--glass-edge: rgba(255, 255, 255, .88);
+	--glass-edge-lower: rgba(255, 255, 255, .60);
+	--glass-rim-glow: rgba(255, 255, 255, .17);
+	--dock-sheen: rgba(255, 255, 255, .32);
+	--dock-shade: rgba(35, 54, 86, .10);
+	--glass-shadow: rgba(20, 30, 60, .20);
+	--glass-pill: rgba(232, 243, 255, .22);
+	--pill-sheen: rgba(255, 255, 255, .58);
+	--pill-lower-tint: rgba(102, 159, 226, .17);
+	--pill-rim-light: rgba(255, 255, 255, .95);
+	--pill-rim-depth: rgba(65, 93, 141, .20);
+	--pill-shadow: rgba(48, 70, 103, .16);
+	--halo: rgba(255, 255, 255, .95);
+	--glass-icon: #1d2230;
+	--glass-accent: #2f6bff;
+	background: rgb(var(--tint-rgb) / var(--tint-a));
+}
+
+@media (prefers-color-scheme: dark) {
+	.liquidGlass {
+		--tint-rgb: 22 25 33;
+		--tint-a: .45;
+		--dock-tint-a: .38;
+		--glass-edge: rgba(255, 255, 255, .46);
+		--glass-edge-lower: rgba(255, 255, 255, .25);
+		--glass-rim-glow: rgba(255, 255, 255, .12);
+		--dock-sheen: rgba(255, 255, 255, .16);
+		--dock-shade: rgba(0, 0, 0, .22);
+		--glass-shadow: rgba(0, 0, 0, .50);
+		--glass-pill: rgba(205, 226, 253, .10);
+		--pill-sheen: rgba(255, 255, 255, .26);
+		--pill-lower-tint: rgba(132, 177, 247, .14);
+		--pill-rim-light: rgba(247, 251, 255, .57);
+		--pill-rim-depth: rgba(83, 126, 193, .31);
+		--pill-shadow: rgba(0, 0, 0, .24);
+		--halo: rgba(0, 0, 0, .75);
+		--glass-icon: #e8ebf2;
+		--glass-accent: #8fb0ff;
+	}
+}
+
+.liquidGlassDefs {
+	position: absolute;
+	inset: 0 auto auto 0;
+	width: 0;
+	height: 0;
+	pointer-events: none;
+}
+
+.liquidSurface {
+	backdrop-filter: var(--surface-filter, none);
+	text-shadow: 0 0 3px var(--halo), 0 0 6px var(--halo);
+}
+
+.liquidDock {
+	/* Reveal more of the moving backdrop without changing the SVG filter. */
+	--tint-a: var(--dock-tint-a);
+	--pad: 6px;
+	position: fixed;
+	z-index: 24;
+	inset: auto 0 var(--glass-dock-bottom);
+	margin-inline: auto;
+	width: min(calc(100% - 32px), 420px);
+	height: var(--glass-dock-height);
+	padding: var(--pad);
+	border-radius: 34px;
+	display: flex;
+	align-items: stretch;
+	backdrop-filter: url(#liquid-glass);
+	box-shadow: 0 12px 32px var(--glass-shadow), 0 1px 3px rgba(0, 0, 0, .10);
+	isolation: isolate;
+	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.no-svg-backdrop .liquidGlass {
+	backdrop-filter: blur(14px) saturate(1.6);
+	-webkit-backdrop-filter: blur(14px) saturate(1.6);
+}
+
+.liquidDock::before {
+	content: "";
+	position: absolute;
+	inset: 1px;
+	z-index: 0;
+	border-radius: inherit;
+	pointer-events: none;
+	background: radial-gradient(85% 115% at 14% 0%, var(--dock-sheen), transparent 72%),
+		linear-gradient(to bottom, transparent 52%, var(--dock-shade));
+}
+
+.liquidDock::after, .liquidSurface::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	border-radius: inherit;
+	pointer-events: none;
+	box-shadow: inset 1.5px 1.5px 0 -.5px var(--glass-edge),
+		inset -1px -1px 0 -.5px var(--glass-edge-lower),
+		inset 0 0 14px var(--glass-rim-glow);
+}
+
+.liquidPill {
+	position: absolute;
+	inset: var(--pad) auto var(--pad) var(--pad);
+	z-index: 1;
+	width: var(--w, 33.333%);
+	border-radius: 28px;
+	pointer-events: none;
+	/* Let the Dock's refracted backdrop show through the moving capsule. */
+	background: radial-gradient(110% 130% at 16% -28%, var(--pill-sheen), transparent 76%),
+		linear-gradient(155deg, transparent 52%, var(--pill-lower-tint)),
+		var(--glass-pill);
+	box-shadow: inset 1px 1px 1px var(--pill-rim-light),
+		inset 0 -1px 2px var(--pill-rim-depth),
+		0 2px 7px var(--pill-shadow);
+	transform: translateX(var(--x, 0px)) scale(var(--s, 1));
+	transition: transform .45s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+.liquidPill.dragging { transition: transform .08s linear; }
+
+.liquidDock .liquidDockItem {
+	position: relative;
+	z-index: 2;
+	flex: 1 1 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	min-width: 0;
+	min-height: 0;
+	padding: 0 4px;
+	border: 0;
+	border-radius: 28px;
+	background: none;
+	color: var(--glass-icon);
+	font-family: inherit;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1;
+	text-align: center;
+	text-decoration: none;
+	opacity: .88;
+	transition: color .25s, opacity .25s;
+	text-shadow: 0 0 3px var(--halo), 0 0 6px var(--halo);
+}
+
+/* Pointer capture selects through the buttons; keyboard and AT still use native click. */
+.liquidDock.liquidDrag .liquidDockItem { pointer-events: none; }
+
+.liquidDockItem svg, .liquidSurface svg {
+	filter: drop-shadow(0 0 2px var(--halo)) drop-shadow(0 0 4px var(--halo));
+}
+
+.liquidDockItem svg {
+	width: 24px;
+	height: 24px;
+	flex: none;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.8;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	transition: transform .35s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+.liquidDock:not(.isDragging) .liquidDockItem[aria-current="page"],
+.liquidDock .liquidDockItem.dragCandidate {
+	color: var(--glass-accent);
+	opacity: 1;
+}
+
+.liquidDock:not(.isDragging) .liquidDockItem[aria-current="page"] svg,
+.liquidDockItem.dragCandidate svg { transform: translateY(-1px) scale(1.06); }
+
+.liquidDockItem:focus-visible { outline-offset: -2px; }
+
+@media (prefers-reduced-motion: reduce) {
+	.liquidPill, .liquidPill.dragging, .liquidDock .liquidDockItem, .liquidDockItem svg { transition: none; }
+}
+
+@media (forced-colors: active) {
+	.liquidDock .liquidDockItem[aria-current="page"] { outline: 1px solid Highlight; outline-offset: -2px; }
+}

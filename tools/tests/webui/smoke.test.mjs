@@ -22,6 +22,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const webroot = join(here, "..", "..", "..", "ksu-module", "webroot");
 const HTML = readFileSync(join(webroot, "index.html"), "utf8");
 const APP = readFileSync(join(webroot, "app.js"), "utf8");
+const GLASS = readFileSync(join(webroot, "liquid-glass.js"), "utf8");
+const APP_DIRECTORY = readFileSync(join(webroot, "app-directory.js"), "utf8");
+const PROFILE_DRAFTS = readFileSync(join(webroot, "profile-drafts.js"), "utf8");
 
 const results = [];
 function test(name, fn) {
@@ -61,6 +64,7 @@ async function bootPage(options = {}) {
 		url: "https://pathmask.test/",
 	});
 	const { window } = dom;
+	window.TextDecoder = TextDecoder;
 	const thrown = [];
 	window.addEventListener("error", (event) => {
 		if (event && event.message) thrown.push(String(event.message));
@@ -71,6 +75,10 @@ async function bootPage(options = {}) {
 
 	const stub = createKsuStub({ window, ...(options.stub || {}) });
 	window.ksu = stub.ksu;
+	if (options.fullScreen) stub.ksu.fullScreen = options.fullScreen;
+	window.eval(GLASS);
+	if (!options.withoutDraftCodec) window.eval(PROFILE_DRAFTS);
+	window.eval(APP_DIRECTORY);
 	if (options.execTimeoutMs) window.__pathmaskExecTimeoutMs = options.execTimeoutMs;
 	try {
 		window.localStorage.setItem("pathmask.uiLang", options.lang || "zh");
@@ -234,9 +242,10 @@ test("refresh does not leave focus in a path input", async () => {
 	}
 });
 
-test("tabs expose tablist semantics and respond to arrow keys", async () => {
+test("settings tabs expose tablist semantics and respond to arrow keys", async () => {
 	const page = await bootReady(await bootPage());
 	try {
+		page.$("#dock-settings").click();
 		const tablist = page.$('[role="tablist"]');
 		assert(tablist, "a role=tablist must exist");
 		assertEqual(page.$$(".tab").length, 5, "five tabs");
@@ -246,25 +255,270 @@ test("tabs expose tablist semantics and respond to arrow keys", async () => {
 		}
 		// Roving tabindex: exactly one tab is in the tab order.
 		assertEqual(page.$$(".tab").filter((t) => t.tabIndex === 0).length, 1, "one tabbable tab");
-		assertEqual(page.$("#tab-config").getAttribute("aria-selected"), "true", "initial aria-selected");
+		assertEqual(page.$("#tab-general").getAttribute("aria-selected"), "true", "initial aria-selected");
 
-		page.$("#tab-config").focus();
-		const event = key(page, page.$("#tab-config"), "ArrowRight");
+		page.$("#tab-general").focus();
+		const event = key(page, page.$("#tab-general"), "ArrowRight");
 		assert(event.defaultPrevented, "arrow key should be consumed by the tablist");
 		assertEqual(page.$("#tab-procguard").getAttribute("aria-selected"), "true", "ArrowRight moves selection");
 		assertEqual(page.$("#tab-procguard").tabIndex, 0, "selection follows the tab stop");
 		assert(page.$("#procguardPanel").classList.contains("active"), "panel follows selection");
-		assert(!page.$("#configPanel").classList.contains("active"), "previous panel deactivated");
+		assert(!page.$("#generalPanel").classList.contains("active"), "previous panel deactivated");
 		assertEqual(page.document.activeElement, page.$("#tab-procguard"), "focus follows selection");
 
 		key(page, page.$("#tab-procguard"), "End");
 		assertEqual(page.$("#tab-report").getAttribute("aria-selected"), "true", "End jumps to the last tab");
 		key(page, page.$("#tab-report"), "ArrowRight");
-		assertEqual(page.$("#tab-config").getAttribute("aria-selected"), "true", "arrow keys wrap around");
+		assertEqual(page.$("#tab-general").getAttribute("aria-selected"), "true", "arrow keys wrap around");
 	} finally {
 		await settle(page);
 		page.close();
 	}
+});
+
+test("the glass Dock reuses production pages and keeps the current settings subpage", async () => {
+	const fullscreen = [];
+	const page = await bootReady(await bootPage({ fullScreen: value => fullscreen.push(value) }));
+	try {
+		assertEqual(fullscreen.join(","), "true", "requests edge-to-edge in KernelSU");
+		assert(page.document.documentElement.classList.contains("no-svg-backdrop"), "non-Chromium picks the glass fallback");
+		assertEqual(page.$$("#mainDock .liquidDockItem").length, 3, "three real Dock items");
+		assertEqual(page.$$("#mainDock .liquidPill").length, 1, "one glass indicator");
+		assert(page.$("#homePanel").classList.contains("active"), "home is initial");
+		assert(page.$(".actions").hidden, "home hides editing actions");
+		page.$("#dock-apps").click();
+		assert(page.$("#appsPanel").classList.contains("active"), "apps opens the installed-app directory");
+		assert(page.$(".actions").hidden, "directory cannot apply changes");
+		page.$("#openLegacyRulesBtn").click();
+		assert(page.$("#configPanel").classList.contains("active"), "legacy rules still open the existing configuration");
+		assert(!page.$(".actions").hidden, "editing keeps save and reload available");
+		page.$("#dock-settings").click();
+		assert(page.$("#generalPanel").classList.contains("active"), "settings opens general");
+		page.$("#tab-logs").click();
+		assertEqual(page.$('#mainDock [aria-current="page"]').id, "dock-settings", "subpage preserves Dock selection");
+		page.$("#dock-home").click();
+		assert(page.$("#settingsShell").hidden, "leaving settings hides its contents");
+		page.$("#dock-settings").click();
+		assert(page.$("#logsPanel").classList.contains("active"), "settings returns to the last subpage");
+	} finally {
+		await settle(page);
+		page.close();
+	}
+});
+
+test("the installed app directory keeps per-app drafts isolated and never applies them", async () => {
+	const page = await bootReady(await bootPage());
+	try {
+		const search = value => {
+			const input = page.$("#directorySearch");
+			input.value = value;
+			input.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+		};
+		const paths = () => page.$$("#draftPathList code").map(node => node.textContent);
+		const add = path => {
+			page.$("#draftPathInput").value = path;
+			page.$("#draftPathForm").dispatchEvent(new page.window.Event("submit", { bubbles: true, cancelable: true }));
+		};
+		page.$("#dock-apps").click();
+		await waitFor(page, () => page.$$(".directoryRow").length === 3, "directory native reader");
+		const shellCalls = page.stub.calls.length;
+		search("10123");
+		assertEqual(page.$$(".directoryRow").length, 1, "search by UID");
+		assert(page.$(".directoryRow img").src.startsWith("ksu://icon/"), "use the manager icon URI");
+		page.$(".directoryRow").click();
+		assert(page.$("#appDetailPanel").classList.contains("active"), "opens app details");
+		assert(page.$(".actions").hidden, "legacy application commands remain hidden in the draft editor");
+		add("relative");
+		assertEqual(page.$("#draftPathInput").getAttribute("aria-invalid"), "true", "refuses relative paths");
+		const sample = "/data/local/tmp/draft-<example>";
+		add(sample);
+		add(sample);
+		assertEqual(JSON.stringify(paths()), JSON.stringify([sample]), "retains a single literal path");
+		assert(!page.$("#draftPathList example"), "path text is not HTML");
+		page.$("#draftEnabled").click();
+		page.$("#draftDirectoryFilter").click();
+		page.$("#saveAppDraftBtn").click();
+		assertEqual(page.$("#draftSaveState").textContent, "已保存草稿（未应用）", "marks the draft accurately");
+		page.$("#directoryBackBtn").click();
+		assertEqual(page.$("#directorySearch").value, "10123", "return preserves search");
+		assert(page.$(".directoryRow .directoryBadge"), "row marks the draft");
+		search("10124");
+		page.$(".directoryRow").click();
+		assertEqual(paths().length, 0, "other app does not inherit a path");
+		assert(!page.$("#draftEnabled").checked && !page.$("#draftDirectoryFilter").checked, "other app does not inherit switches");
+		page.$("#directoryBackBtn").click();
+		search("10123");
+		page.$(".directoryRow").click();
+		assertEqual(JSON.stringify(paths()), JSON.stringify([sample]), "draft survives page changes");
+		assert(page.$("#draftDirectoryFilter").checked, "restores draft feature");
+		assertEqual(page.stub.calls.length, shellCalls, "draft flow performs no shell calls");
+		page.$("#directoryBackBtn").click();
+		search("1000");
+		assertEqual(page.$$(".directoryRow").length, 0, "system apps are hidden by default");
+		page.$("#directorySystemInput").click();
+		await waitFor(page, () => page.$$(".directoryRow").length === 1, "include system apps");
+		assertEqual(page.stub.calls.length, shellCalls, "native reader needs no shell fallback");
+	} finally {
+		await settle(page);
+		page.close();
+	}
+});
+
+test("V2 backup restore keeps legacy and existing drafts unchanged", async () => {
+	const page = await bootReady(await bootPage());
+	try {
+		const oldPaths = () => page.$$("#pathList .pathRowPath").map(field => field.value).join("\n");
+		const oldScope = () => page.$('input[name="scope"]:checked').value;
+		const before = [oldPaths(), oldScope()].join("\n");
+		page.$("#dock-apps").click();
+		await waitFor(page, () => page.$$(".directoryRow").length >= 2, "app directory");
+		const shellCalls = page.stub.calls.length;
+		page.$(".directoryCompatibility").open = true;
+		page.$("#previewLegacyMigrationBtn").click();
+		const report = page.$("#legacyMigrationPreview").textContent;
+		assert(report.includes("旧版模式：黑名单") && report.includes("只读预览") && report.includes("直接 UID"), "preview describes but does not change legacy mode");
+		const codec = page.window.PathMaskProfileDrafts;
+		for (const scope of ["allow", "global"]) assertEqual(codec.inspectLegacy({ scopeText: scope }).mode, scope, "does not coerce legacy modes");
+		assertEqual(codec.inspectLegacy({ scopeText: "future" }).mode, "unknown", "unknown legacy mode stays unknown");
+		const keys = page.$$(".directoryRow").slice(0, 2).map(el => el.dataset.directoryKey);
+		const open = key => page.$$(".directoryRow").find(el => el.dataset.directoryKey === key).click();
+		const addPath = path => {
+			page.$("#draftPathInput").value = path;
+			page.$("#draftPathForm").dispatchEvent(new page.window.Event("submit", { bubbles: true, cancelable: true }));
+		};
+		const first = "/data/local/tmp/saved-draft.txt", second = "/data/local/tmp/unsaved-draft.txt";
+		open(keys[0]); addPath(first); page.$("#saveAppDraftBtn").click(); page.$("#directoryBackBtn").click();
+		open(keys[1]); addPath(second); page.$("#directoryBackBtn").click();
+		const exportBackup = () => { page.$("#exportAppDraftsBtn").click(); return JSON.parse(page.$("#appDraftBackupOutput").value); };
+		const saved = exportBackup();
+		assertEqual(saved.format, "pathmask-profile-drafts", "backup is a draft-only format");
+		assertEqual(saved.schemaVersion, 2, "expected schema version");
+		assertEqual(saved.profiles.length, 1, "unsaved drafts are not exported");
+		const source = page.$("#appDraftBackupInput");
+		const restore = json => { source.value = JSON.stringify(json); page.$("#importAppDraftsBtn").click(); };
+		const status = () => page.$("#appDraftBackupStatus").textContent;
+		const otherUser = { ...saved.profiles[0], userId: 10, paths: ["/data/local/tmp/restored-draft.txt"] };
+		restore({ ...saved, schemaVersion: 3, profiles: [otherUser] });
+		assert(status().includes("不支持") && JSON.parse(source.value).schemaVersion === 3, "future version leaves input intact");
+		assertEqual(exportBackup().profiles.length, 1, "unsupported version did not merge");
+		restore({ ...saved, profiles: [otherUser, { ...otherUser, userId: 11, paths: ["/"] }] });
+		assert(status().includes("格式不正确"), "invalid paths reject mixed backup");
+		assertEqual(exportBackup().profiles.length, 1, "invalid later row also rejects valid first row");
+		restore({ ...saved, profiles: [otherUser, otherUser] });
+		assert(status().includes("格式不正确"), "duplicate app keys reject backup");
+		const unsavedConflict = { ...saved.profiles[0], packageName: keys[1].split(":")[1], paths: [] };
+		restore({ ...saved, profiles: [{ ...saved.profiles[0], paths: [] }, unsavedConflict, otherUser] });
+		assert(status().includes("已导入 1 个草稿，保留 2 个现有草稿") && status().includes("均未应用"), "valid backup skips conflicts");
+		assertEqual(exportBackup().profiles.length, 2, "same package for a different Android user is a distinct draft");
+		open(keys[0]); assertEqual(page.$("#draftPathList code").textContent, first, "saved draft remains");
+		page.$("#directoryBackBtn").click();
+		open(keys[1]); assertEqual(page.$("#draftPathList code").textContent, second, "in-flight edits remain");
+		page.$("#directoryBackBtn").click();
+		page.$("#openLegacyRulesBtn").click();
+		assertEqual([oldPaths(), oldScope()].join("\n"), before, "legacy paths and mode remain unchanged");
+		assertEqual(page.stub.calls.length, shellCalls, "none of the draft compatibility controls issued a device command");
+	} finally {
+		await settle(page);
+		page.close();
+	}
+});
+
+test("missing draft assets leave the legacy editor reachable", async () => {
+	const page = await bootReady(await bootPage({ withoutDraftCodec: true }));
+	try {
+		page.$("#dock-apps").click();
+		assert(page.$("#configPanel").classList.contains("active"), "old editor is the safe fallback");
+		assert(!page.$(".actions").hidden, "old controls remain available");
+		assertEqual(page.$("#dock-apps").getAttribute("aria-controls"), "configPanel", "navigation follows fallback panel");
+		assertEqual(page.thrown.length, 0, "optional assets did not cause any script error");
+	} finally {
+		await settle(page);
+		page.close();
+	}
+});
+
+function profileBridge({ initial = null, noReceipt = false } = {}) {
+	return {
+		respond(command) {
+			if (command.includes("profile_snapshot || exit 22")) {
+				return { stdout: initial === null ? "missing\n" : "a".repeat(64) + "\n" + Buffer.from(initial).toString("base64") };
+			}
+			if (command.includes("mktemp -d '/data/adb/pathmask/.profile-write.XXXXXX'")) {
+				return { stdout: "/data/adb/pathmask/.profile-write.mock00\n" };
+			}
+			const acknowledgment = /PATHMASK_APP_PROFILES_OK \$request (\d+)/.exec(command);
+			if (acknowledgment) {
+				return noReceipt ? { errno: 27, stderr: "No kernel confirmation" }
+					: { stdout: "PATHMASK_APP_PROFILES_OK 12345 " + acknowledgment[1] + "\n" };
+			}
+		},
+	};
+}
+
+async function saveNewProfile(page) {
+	page.$("#dock-apps").click();
+	await waitFor(page, () => page.$$(".directoryRow").length === 3, "directory");
+	page.$(".directoryRow").click();
+	const pkg = page.$("#detailAppPackage").textContent;
+	const path = "/data/local/tmp/new-profile";
+	const input = page.$("#draftPathInput");
+	input.value = path;
+	page.$("#draftPathForm").dispatchEvent(new page.window.Event("submit", { bubbles: true, cancelable: true }));
+	page.$("#draftEnabled").click();
+	page.$("#draftDirectoryFilter").click();
+	page.$("#saveAppDraftBtn").click();
+	page.$("#directoryBackBtn").click();
+	return { pkg, path };
+}
+
+test("confirmed profile changes preserve existing profiles across sessions", async () => {
+	const initial = "app 0 luna.safe.luna 1 0\npath /data/local/tmp/existing-profile\n";
+	const page = await bootReady(await bootPage({ stub: profileBridge({ initial }) }));
+	try {
+		page.$("#dock-apps").click();
+		await waitFor(page, () => page.$$(".directoryRow").length === 3, "existing profiles loaded");
+		page.$(".directoryRow[data-directory-key='0:luna.safe.luna']").click();
+		assertEqual(page.$("#draftPathList code").textContent, "/data/local/tmp/existing-profile", "restores existing paths");
+		assert(page.$("#draftEnabled").checked, "restores the existing enable switch");
+		page.$("#directoryBackBtn").click();
+		const { pkg, path } = await saveNewProfile(page);
+		const before = page.stub.calls.length;
+		page.$("#applyProfilesBtn").click();
+		assertEqual(page.stub.calls.length, before, "first click does not touch the device");
+		page.$("#applyProfilesBtn").click();
+		await waitFor(page, () => page.$("#profileApplyState").textContent.includes("内核已确认 2"), "commit confirmation");
+		const writes = page.stub.calls.filter(command => command.includes(">> '/data/adb/pathmask/.profile-write.mock00/candidate'"));
+		assert(writes.some(command => command.includes("app 0 " + pkg + " 1 1") && command.includes(path)), "updated app was staged");
+		assert(writes.some(command => command.includes("/data/local/tmp/existing-profile")), "unmodified profile was preserved");
+		const commit = page.stub.calls.find(command => command.includes("PATHMASK_APP_PROFILES_OK $request"));
+		assert(commit.includes("--check-app-profiles") && commit.indexOf("grep -Fxq") < commit.indexOf('mv "$candidate" "$cfg"'), "confirmation gates replacement");
+	} finally { await settle(page); page.close(); }
+});
+
+test("profile apply fails visibly without a kernel acknowledgment", async () => {
+	const page = await bootReady(await bootPage({ stub: profileBridge({ noReceipt: true }) }));
+	try {
+		await saveNewProfile(page);
+		page.$("#applyProfilesBtn").click();
+		page.$("#applyProfilesBtn").click();
+		await waitFor(page, () => page.$("#profileApplyState").textContent.includes("应用失败"), "reject missing receipt");
+		assert(!page.$("#applyProfilesBtn").disabled, "pending edits are retained");
+	} finally { await settle(page); page.close(); }
+});
+
+test("profile codec rejects ambiguous and overlong paths", async () => {
+	const page = await bootReady(await bootPage());
+	try {
+		const codec = page.window.PathMaskProfileDrafts;
+		for (const path of ["/fixture/with,comma", "/fixture/with;semicolon", "/" + "测".repeat(85)]) {
+			assert(!codec.validPath(path), "bad path rejected");
+			const input = JSON.stringify({ format: "pathmask-profile-drafts", schemaVersion: 2,
+				profiles: [{ packageName: "com.example.fixture", userId: 0, enabled: true, filterDirectory: false, paths: [path] }] });
+			assert(codec.decodeBackup(input).error === "invalid", "bad backup rejected");
+		}
+		assert(codec.validPath("/" + "a".repeat(254)), "255 bytes accepted");
+		assert(codec.decodeRules("path /fixture") === null, "orphan path is not an empty config");
+	} finally { await settle(page); page.close(); }
 });
 
 test("log tabs publish their state as toggle buttons", async () => {
@@ -401,12 +655,13 @@ test("toast is a live region so feedback is announced", async () => {
 test("switching language translates markup and already-rendered text", async () => {
 	const page = await bootReady(await bootPage());
 	try {
+		page.$("#dock-settings").click();
 		page.$('.langOption[data-lang="en"]').click();
 		await sleep(30);
 		assertEqual(page.document.documentElement.lang, "en", "<html lang> follows the switch");
 		assertEqual(page.$("#saveBtn").textContent, "Save config", "static button translated");
 		assertEqual(page.$("#moduleState").textContent, "Loaded", "summary card translated");
-		assertEqual(page.$("#tab-config").getAttribute("aria-selected"), "true", "tab state survives the switch");
+		assertEqual(page.$("#tab-general").getAttribute("aria-selected"), "true", "tab state survives the switch");
 		// The verdict box is built from JS strings; before the fix it was
 		// simply not re-rendered on a language switch.
 		assert(/running|PathMask/i.test(page.$("#verdictBox").textContent),

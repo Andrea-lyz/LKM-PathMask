@@ -1,0 +1,101 @@
+:root {
+	color-scheme: light;
+
+	/* Material 3 roles shared by the offline WebUI components. */
+	--md-sys-color-primary: #415f91;
+	--md-sys-color-on-primary: #fff;
+	--md-sys-color-primary-container: #d6e3ff;
+	--md-sys-color-on-primary-container: #001b3e;
+	--md-sys-color-secondary-container: #dbe2f5;
+	--md-sys-color-on-secondary-container: #161f31;
+	--md-sys-color-surface: #f9f9ff;
+	--md-sys-color-surface-container-lowest: #fff;
+	--md-sys-color-surface-container-low: #f2f3fa;
+	--md-sys-color-surface-container: #eceef6;
+	--md-sys-color-surface-container-high: #e6e8f0;
+	--md-sys-color-surface-container-highest: #e0e2eb;
+	--md-sys-color-on-surface: #191c20;
+	--md-sys-color-on-surface-variant: #434750;
+	--md-sys-color-outline: #737782;
+	--md-sys-color-outline-variant: #c3c6d0;
+	--md-sys-color-inverse-surface: #2e3036;
+	--md-sys-color-inverse-on-surface: #f1f0f7;
+	--md-sys-color-error: #a82c25;
+	--md-sys-color-error-container: #ffdad6;
+	--md-sys-color-on-error-container: #410002;
+	--md-sys-color-scrim: rgb(0 0 0 / .46);
+
+	/* Additional status roles. The message, not the hue, indicates the state. */
+	--status-success: #2b664b;
+	--status-success-container: #ccebd9;
+	--status-on-success-container: #132e23;
+	--status-warning: #795622;
+	--status-warning-container: #ffdfa8;
+	--status-on-warning-container: #3d2a09;
+	--qr-paper: #fff;
+
+	--font-family: Roboto, system-ui, sans-serif;
+	--font-mono: ui-monospace, Consolas, "Liberation Mono", monospace;
+	--md-sys-typescale-title-large: 500 1.375rem / 1.75rem var(--font-family);
+	--md-sys-typescale-title-medium: 600 1rem / 1.5rem var(--font-family);
+	--md-sys-typescale-body-large: 400 1rem / 1.5 var(--font-family);
+	--md-sys-typescale-body-medium: 400 .875rem / 1.45 var(--font-family);
+	--md-sys-typescale-body-small: 400 .75rem / 1.45 var(--font-family);
+	--md-sys-typescale-label-large: 600 .875rem / 1.25 var(--font-family);
+	--md-sys-typescale-label-medium: 600 .75rem / 1.25 var(--font-family);
+
+	--md-sys-shape-corner-extra-small: .25rem;
+	--md-sys-shape-corner-small: .5rem;
+	--md-sys-shape-corner-medium: .75rem;
+	--md-sys-shape-corner-large: 1rem;
+	--md-sys-shape-corner-extra-large: 1.75rem;
+	--md-sys-shape-corner-full: 999px;
+
+	--space-1: .25rem;
+	--space-2: .5rem;
+	--space-3: .75rem;
+	--space-4: 1rem;
+	--space-5: 1.25rem;
+	--space-6: 1.5rem;
+	--touch-target: 3rem;
+	--content-width: 58rem;
+	--gutter: clamp(.75rem, 4vw, 1.5rem);
+	--md-sys-state-hover: 8%;
+	--md-sys-state-pressed: 12%;
+	--md-sys-motion-short: 120ms;
+	--md-sys-motion-standard: cubic-bezier(.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		color-scheme: dark;
+		--md-sys-color-primary: #aac7ff;
+		--md-sys-color-on-primary: #0a305f;
+		--md-sys-color-primary-container: #294777;
+		--md-sys-color-on-primary-container: #d6e3ff;
+		--md-sys-color-secondary-container: #3e485c;
+		--md-sys-color-on-secondary-container: #dbe2f5;
+		--md-sys-color-surface: #111318;
+		--md-sys-color-surface-container-lowest: #0c0e13;
+		--md-sys-color-surface-container-low: #191c21;
+		--md-sys-color-surface-container: #1d2026;
+		--md-sys-color-surface-container-high: #272a31;
+		--md-sys-color-surface-container-highest: #32353c;
+		--md-sys-color-on-surface: #e2e2e9;
+		--md-sys-color-on-surface-variant: #c3c6d0;
+		--md-sys-color-outline: #8e919b;
+		--md-sys-color-outline-variant: #434750;
+		--md-sys-color-inverse-surface: #e2e2e9;
+		--md-sys-color-inverse-on-surface: #2e3036;
+		--md-sys-color-error: #ffb4ab;
+		--md-sys-color-error-container: #801d19;
+		--md-sys-color-on-error-container: #ffdad6;
+		--md-sys-color-scrim: rgb(0 0 0 / .6);
+		--status-success: #a7d8bb;
+		--status-success-container: #254d3b;
+		--status-on-success-container: #ccebd9;
+		--status-warning: #f5cb83;
+		--status-warning-container: #56401d;
+		--status-on-warning-container: #ffdfa8;
+	}
+}

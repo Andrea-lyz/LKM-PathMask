@@ -187,6 +187,7 @@ function confLookup(command, overrides) {
 }
 
 export function resolveCommand(command, confOverrides) {
+	if (command.includes("profile_snapshot || exit 22")) return "missing\n";
 	const fromConf = confLookup(command, confOverrides);
 	if (fromConf !== null) return fromConf;
 	for (const [needle, handler] of RULES) {
@@ -221,11 +222,11 @@ export function createKsuStub(options = {}) {
 				pending.push(callbackName);
 				return;
 			}
-			let stdout;
+			let response;
 			try {
-				stdout = resolveCommand(command, options.conf);
+				response = options.respond?.(command) ?? { stdout: resolveCommand(command, options.conf) };
 			} catch (error) {
-				stdout = "";
+				response = { errno: 1, stderr: String(error) };
 			}
 			// The real bridge answers asynchronously from the app
 			// thread; a microtask keeps the page's await points
@@ -233,7 +234,7 @@ export function createKsuStub(options = {}) {
 			Promise.resolve().then(() => {
 				const view = host();
 				const cb = view && view[callbackName];
-				if (typeof cb === "function") cb(0, stdout, "");
+				if (typeof cb === "function") cb(response.errno || 0, response.stdout || "", response.stderr || "");
 			});
 		},
 	};

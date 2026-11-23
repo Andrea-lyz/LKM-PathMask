@@ -18,6 +18,19 @@ Follow-up ideas:
 - Add a runtime debug log that prints the number of hidden entries removed from
   each `getdents64` buffer.
 
+## Per-app rules
+
+- WebUI merges confirmed edits by Android user and package, preserving other
+  on-disk profiles. Persistence is gated on a matching kernel receipt.
+- The compiler rejects malformed or ambiguous configurations before staging.
+  Resolving one profile never changes the legacy scope.
+- The kernel stages a complete candidate, then replaces the immutable per-app
+  table in one RCU publication. Non-targeted process lookups skip path copies
+  and target scans. Directory matches include the filesystem device.
+- Unverified identities, including isolated and app-zygote processes, are not
+  eligible for per-app activation. No changes to device runtime were verified
+  in the host-side regression tests.
+
 ## Scoped hiding / blacklist / whitelist
 
 Status: implemented for UID blacklist and whitelist.

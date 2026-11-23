@@ -15,11 +15,15 @@
 #include <linux/dcache.h>
 #include <linux/err.h>
 #include <linux/fs.h>
+#include <linux/file.h>
 #include <linux/namei.h>
 #include <linux/path.h>
 #include <linux/version.h>
 #include <linux/dirent.h>
 #include <linux/slab.h>
+#include <linux/mutex.h>
+#include <linux/rcupdate.h>
+#include <linux/sort.h>
 #include <linux/string.h>
 #include <linux/uidgid.h>
 #include <linux/uaccess.h>
@@ -30,7 +34,9 @@
 #include "hint.h"
 
 #define PM_LOG_PREFIX "pathmask: "
+
 #define MAX_HIDE_TARGETS 64
+#define MAX_APP_TARGETS 256
 #define MAX_DENY_UIDS 1024
 #define TARGET_PATHS_LEN 4096
 #define TARGET_TEXT_LEN 256
@@ -162,6 +168,16 @@ static char deny_uids[UID_LIST_LEN];
 module_param_string(deny_uids, deny_uids, sizeof(deny_uids), 0644);
 MODULE_PARM_DESC(deny_uids, "Comma-separated scope UIDs: hidden in deny mode, exempt in allow mode");
 
+/* Per-app updates are staged privately and published as one RCU snapshot. */
+static bool profile_mode;
+module_param(profile_mode, bool, 0444);
+MODULE_PARM_DESC(profile_mode,
+		 "Load with no legacy target_paths; per-app rules arrive via app_profiles");
+
+static DEFINE_MUTEX(pm_app_rules_lock);
+static bool pm_app_rules_ready;
+static bool getdents_registered;
+
 struct hidden_target {
 	dev_t dev;
 	unsigned long long ino;
@@ -188,6 +204,22 @@ struct hidden_target {
 
 static struct hidden_target targets[MAX_HIDE_TARGETS];
 static unsigned int target_count;
+
+struct pm_app_target {
+	uid_t uid;
+	bool filter_dirents;
+	struct hidden_target target;
+};
+
+struct pm_app_rules {
+	u64 generation;
+	unsigned int count;
+	bool rejected;
+	struct pm_app_target entries[MAX_APP_TARGETS];
+};
+
+static struct pm_app_rules __rcu *pm_active_apps;
+static struct pm_app_rules *pm_pending_apps;
 
 /*
  * Read-only sysfs view of how many target paths the module successfully
@@ -325,36 +357,146 @@ static int resolve_path_helpers(void)
 	return 0;
 }
 
-static inline bool is_target_inode(const struct inode *inode)
+struct pm_proc_ids {
+	uid_t uid;
+	uid_t euid;
+	uid_t fsuid;
+};
+
+static inline void pm_read_proc_ids(struct pm_proc_ids *ids)
 {
+	ids->uid = __kuid_val(current_uid());
+	ids->euid = __kuid_val(current_euid());
+	ids->fsuid = __kuid_val(current_fsuid());
+}
+
+static inline bool pm_scope_hides_ids(const struct pm_proc_ids *ids);
+
+struct pm_query {
+	const struct pm_app_rules *apps;
+	uid_t uid;
+	unsigned int first;
+	bool legacy;
+};
+
+/* Only consider the exact, ordinary process identity for per-app rules. */
+static bool pm_ordinary_app_uid(uid_t uid)
+{
+	uid_t app_id = uid % ANDROID_USER_OFFSET;
+
+	return uid <= INT_MAX && app_id >= 10000u && app_id <= 19999u;
+}
+
+/* Called with rcu_read_lock() held. Entries are sorted by UID at commit. */
+static void pm_prepare_query(struct pm_query *query,
+			     const struct pm_proc_ids *ids, bool dirents)
+{
+	const struct pm_app_rules *apps = rcu_dereference(pm_active_apps);
+	unsigned int low = 0, high;
+
+	query->legacy = target_count && (!dirents || READ_ONCE(hide_dirents)) &&
+			pm_scope_hides_ids(ids);
+	query->apps = NULL;
+	query->uid = ids->uid;
+	query->first = 0;
+	if (!apps || ids->uid != ids->euid || ids->uid != ids->fsuid)
+		return;
+
+	high = apps->count;
+	while (low < high) {
+		unsigned int mid = low + (high - low) / 2;
+
+		if (apps->entries[mid].uid < ids->uid)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+	if (low < apps->count && apps->entries[low].uid == ids->uid) {
+		query->apps = apps;
+		query->first = low;
+	}
+}
+
+static bool pm_query_has_targets(const struct pm_query *query, bool dirents)
+{
+	const struct pm_app_rules *apps = query->apps;
 	unsigned int i;
 
-	if (!inode || !inode->i_sb)
+	if (query->legacy)
+		return true;
+	if (!apps)
 		return false;
-
-	for (i = 0; i < target_count; i++) {
-		if (!targets[i].inode_ok)
-			continue;
-		if (inode->i_ino == targets[i].ino &&
-		    inode->i_sb->s_dev == targets[i].dev)
+	if (!dirents)
+		return true;
+	for (i = query->first; i < apps->count && apps->entries[i].uid == query->uid; i++) {
+		if (apps->entries[i].filter_dirents)
 			return true;
 	}
-
 	return false;
 }
 
-static inline bool is_target_ino(__u64 ino)
+static bool pm_has_targets(const struct pm_proc_ids *ids, bool dirents)
 {
+	struct pm_query query;
+	bool matched;
+
+	rcu_read_lock();
+	pm_prepare_query(&query, ids, dirents);
+	matched = pm_query_has_targets(&query, dirents);
+	rcu_read_unlock();
+	return matched;
+}
+
+static bool pm_current_has_targets(void)
+{
+	struct pm_proc_ids ids;
+
+	pm_read_proc_ids(&ids);
+	return pm_has_targets(&ids, false);
+}
+
+static bool pm_inode_matches(const struct hidden_target *target, dev_t dev, u64 ino)
+{
+	return target->inode_ok && target->dev == dev && target->ino == ino;
+}
+
+static bool pm_match_inode(const struct pm_query *query, dev_t dev, u64 ino,
+			   bool dirents)
+{
+	const struct pm_app_rules *apps = query->apps;
 	unsigned int i;
 
-	for (i = 0; i < target_count; i++) {
-		if (!targets[i].inode_ok)
-			continue;
-		if (ino == (__u64)targets[i].ino)
+	if (query->legacy) {
+		for (i = 0; i < target_count; i++) {
+			if (pm_inode_matches(&targets[i], dev, ino))
+				return true;
+		}
+	}
+	if (!apps)
+		return false;
+	for (i = query->first; i < apps->count && apps->entries[i].uid == query->uid; i++) {
+		const struct pm_app_target *entry = &apps->entries[i];
+
+		if ((!dirents || entry->filter_dirents) && pm_inode_matches(&entry->target, dev, ino))
 			return true;
 	}
-
 	return false;
+}
+
+static bool is_target_inode(const struct inode *inode)
+{
+	struct pm_proc_ids ids;
+	struct pm_query query;
+	bool matched;
+
+	if (!inode || !inode->i_sb)
+		return false;
+	pm_read_proc_ids(&ids);
+	rcu_read_lock();
+	pm_prepare_query(&query, &ids, false);
+	matched = pm_match_inode(&query, inode->i_sb->s_dev, inode->i_ino, false);
+	rcu_read_unlock();
+	return matched;
 }
 
 static inline bool is_denied_uid(uid_t uid)
@@ -388,29 +530,23 @@ static inline bool is_android_isolated_uid(uid_t uid)
 	       app_id <= ANDROID_APP_ZYGOTE_ISOLATED_END;
 }
 
-static inline bool should_hide_for_current(void)
+static inline bool pm_scope_hides_ids(const struct pm_proc_ids *ids)
 {
-	uid_t uid, euid, fsuid;
-
 	if (active_scope == SCOPE_GLOBAL)
 		return true;
 
-	uid = __kuid_val(current_uid());
-	euid = __kuid_val(current_euid());
-	fsuid = __kuid_val(current_fsuid());
-
 	if (active_scope == SCOPE_ALLOW)
-		return !(is_denied_uid(uid) || is_denied_uid(euid) ||
-			 is_denied_uid(fsuid));
+		return deny_uid_count && !(is_denied_uid(ids->uid) || is_denied_uid(ids->euid) ||
+			 is_denied_uid(ids->fsuid));
 
 	if (hide_isolated &&
-	    (is_android_isolated_uid(uid) ||
-	     is_android_isolated_uid(euid) ||
-	     is_android_isolated_uid(fsuid)))
+	    (is_android_isolated_uid(ids->uid) ||
+	     is_android_isolated_uid(ids->euid) ||
+	     is_android_isolated_uid(ids->fsuid)))
 		return true;
 
-	return is_denied_uid(uid) || is_denied_uid(euid) ||
-	       is_denied_uid(fsuid);
+	return is_denied_uid(ids->uid) || is_denied_uid(ids->euid) ||
+	       is_denied_uid(ids->fsuid);
 }
 
 static int parse_scope_mode(void)
@@ -505,7 +641,7 @@ static int parse_deny_uids(void)
 	if (active_scope == SCOPE_DENY && !deny_uid_count)
 		pr_warn(PM_LOG_PREFIX "scope_mode=deny but deny_uids is empty\n");
 	if (active_scope == SCOPE_ALLOW && !deny_uid_count)
-		pr_warn(PM_LOG_PREFIX "scope_mode=allow but allow UID list is empty; all UIDs hidden\n");
+		pr_warn(PM_LOG_PREFIX "scope_mode=allow but allow UID list is empty; legacy scope disabled\n");
 
 	return 0;
 }
@@ -568,62 +704,64 @@ static void discover_storage_aliases(void)
 	}
 }
 
-static int add_target_path(const char *path_name)
+static int pm_resolve_target(struct hidden_target *target, const char *path_name)
 {
 	struct path path;
 	struct inode *inode;
 	int ret;
 	unsigned int i;
 
-	if (target_count >= MAX_HIDE_TARGETS) {
-		pr_warn(PM_LOG_PREFIX "too many targets, skip %s\n", path_name);
-		return -ENOSPC;
-	}
-
+	if (strlen(path_name) >= sizeof(target->path))
+		return -ENAMETOOLONG;
 	if (!pm_kern_path || !pm_path_put)
 		return -ENOENT;
 
 	ret = pm_invoke_kern_path(path_name, LOOKUP_FOLLOW, &path);
-	if (ret) {
-		pr_warn(PM_LOG_PREFIX "%s not found (err=%d), skip\n",
-			path_name, ret);
+	if (ret)
 		return ret;
-	}
-
 	inode = d_inode(path.dentry);
 	if (!inode || !inode->i_sb) {
 		pm_invoke_path_put(&path);
-		pr_warn(PM_LOG_PREFIX "%s has no inode, skip\n", path_name);
 		return -ENOENT;
 	}
 
-	targets[target_count].ino = inode->i_ino;
-	targets[target_count].dev = inode->i_sb->s_dev;
-	targets[target_count].inode_ok = inode->i_ino != 0;
-	strscpy(targets[target_count].path, path_name,
-		sizeof(targets[target_count].path));
-	targets[target_count].under_storage = false;
+	target->ino = inode->i_ino;
+	target->dev = inode->i_sb->s_dev;
+	target->inode_ok = inode->i_ino != 0;
+	strscpy(target->path, path_name, sizeof(target->path));
+	target->under_storage = false;
 	for (i = 0; i < pm_storage_root_count; i++) {
 		size_t rlen = pm_storage_roots[i].len;
 
-		if (strncmp(targets[target_count].path,
-			    pm_storage_roots[i].path, rlen) == 0 &&
-		    (!targets[target_count].path[rlen] ||
-		     targets[target_count].path[rlen] == '/')) {
-			targets[target_count].under_storage = true;
-			targets[target_count].storage_suffix_off = rlen;
-			targets[target_count].storage_suffix_len =
-				strlen(targets[target_count].path) - rlen;
+		if (!strncmp(target->path, pm_storage_roots[i].path, rlen) &&
+		    (!target->path[rlen] || target->path[rlen] == '/')) {
+			target->under_storage = true;
+			target->storage_suffix_off = rlen;
+			target->storage_suffix_len = strlen(target->path) - rlen;
 			break;
 		}
 	}
-	pr_info(PM_LOG_PREFIX "target[%u] %s ino=%llu dev=%u:%u\n",
-		target_count, path_name, targets[target_count].ino,
-		MAJOR(targets[target_count].dev),
+	pm_invoke_path_put(&path);
+	return 0;
+}
+
+static int add_target_path(const char *path_name)
+{
+	int ret;
+
+	if (target_count == ARRAY_SIZE(targets)) {
+		pr_warn(PM_LOG_PREFIX "too many legacy targets, skipping remaining paths\n");
+		return -ENOSPC;
+	}
+	ret = pm_resolve_target(&targets[target_count], path_name);
+	if (ret) {
+		pr_warn(PM_LOG_PREFIX "cannot resolve legacy target %s: %d\n", path_name, ret);
+		return ret;
+	}
+	pr_info(PM_LOG_PREFIX "target[%u] %s ino=%llu dev=%u:%u\n", target_count,
+		path_name, targets[target_count].ino, MAJOR(targets[target_count].dev),
 		MINOR(targets[target_count].dev));
 	target_count++;
-	pm_invoke_path_put(&path);
-
 	return 0;
 }
 
@@ -654,6 +792,175 @@ static int resolve_target_paths(const char *paths)
 
 	return 0;
 }
+
+/* Each request refers to exactly one staging generation. A failed add
+ * poisons that generation; readers continue to use the last valid commit.
+ */
+static int pm_compare_owner(const void *a, const void *b)
+{
+	uid_t left = ((const struct pm_app_target *)a)->uid;
+	uid_t right = ((const struct pm_app_target *)b)->uid;
+
+	return (left > right) - (left < right);
+}
+
+static bool pm_valid_rule_path(const char *path)
+{
+	const unsigned char *p = (const unsigned char *)path;
+	size_t len;
+	bool has_component = false;
+
+	if (!path || path[0] != '/')
+		return false;
+	len = strlen(path);
+	if (len < 2 || len >= TARGET_TEXT_LEN || path[len - 1] == ' ')
+		return false;
+	for (; *p; p++) {
+		if (*p < 32 || *p == 127 || *p == ',' || *p == ';')
+			return false;
+		if (*p != '/')
+			has_component = true;
+	}
+	return has_component;
+}
+
+/* One path per write, separated from the fixed header by one space. */
+static int pm_add_app_target(struct pm_app_rules *apps, char *args)
+{
+	char *uid_text = strsep(&args, " ");
+	char *flag = strsep(&args, " ");
+	struct pm_app_target *entry;
+	unsigned int uid, i;
+	int ret;
+
+	if (!uid_text || kstrtouint(uid_text, 10, &uid) || !pm_ordinary_app_uid(uid) ||
+	    !flag || (strcmp(flag, "0") && strcmp(flag, "1")) || !pm_valid_rule_path(args))
+		return -EINVAL;
+	if (*flag == '1' && !getdents_registered)
+		return -EOPNOTSUPP;
+	if (apps->count == MAX_APP_TARGETS)
+		return -ENOSPC;
+	for (i = 0; i < apps->count; i++) {
+		if (apps->entries[i].uid == uid && !strcmp(apps->entries[i].target.path, args))
+			return -EEXIST;
+	}
+
+	entry = &apps->entries[apps->count];
+	ret = pm_resolve_target(&entry->target, args);
+	if (ret)
+		return ret;
+	if (!entry->target.inode_ok)
+		return -EOPNOTSUPP;
+	entry->uid = uid;
+	entry->filter_dirents = *flag == '1';
+	apps->count++;
+	return 0;
+}
+
+static void pm_publish_app_rules(struct pm_app_rules *next)
+{
+	struct pm_app_rules *previous = rcu_dereference_protected(pm_active_apps,
+						lockdep_is_held(&pm_app_rules_lock));
+
+	rcu_assign_pointer(pm_active_apps, next);
+	if (previous) {
+		synchronize_rcu();
+		kvfree(previous);
+	}
+}
+
+static int pm_app_profiles_set(const char *val, const struct kernel_param *kp)
+{
+	char *text, *args, *command, *generation_text;
+	struct pm_app_rules *next;
+	u64 generation;
+	int ret = -EINVAL;
+
+	(void)kp;
+	mutex_lock(&pm_app_rules_lock);
+	if (!pm_app_rules_ready) {
+		ret = -EAGAIN;
+		goto unlock;
+	}
+	if (!val || strnlen(val, 512) == 512 || strchr(val, '\n'))
+		goto unlock;
+	text = kstrdup(val, GFP_KERNEL);
+	if (!text) {
+		ret = -ENOMEM;
+		goto unlock;
+	}
+	args = text;
+	command = strsep(&args, " ");
+	generation_text = strsep(&args, " ");
+	if (!generation_text || kstrtoull(generation_text, 10, &generation) || !generation)
+		goto out;
+
+	if (!strcmp(command, "begin") && !args) {
+		next = kvzalloc(sizeof(*next), GFP_KERNEL);
+		if (!next) {
+			ret = -ENOMEM;
+			goto out;
+		}
+		next->generation = generation;
+		kvfree(pm_pending_apps);
+		pm_pending_apps = next;
+		ret = 0;
+		goto out;
+	}
+	next = pm_pending_apps;
+	if (!next || next->generation != generation) {
+		ret = -ESTALE;
+		goto out;
+	}
+	if (!strcmp(command, "abort") && !args) {
+		pm_pending_apps = NULL;
+		kvfree(next);
+		ret = 0;
+	} else if (next->rejected) {
+		ret = -EINVAL;
+	} else if (!strcmp(command, "add") && args) {
+		ret = pm_add_app_target(next, args);
+		if (ret)
+			next->rejected = true;
+	} else if (!strcmp(command, "commit") && !args) {
+		sort(next->entries, next->count, sizeof(next->entries[0]), pm_compare_owner, NULL);
+		pm_pending_apps = NULL;
+		pm_publish_app_rules(next);
+		pr_info(PM_LOG_PREFIX "%u app path(s) committed\n", next->count);
+		ret = 0;
+	} else {
+		next->rejected = true;
+	}
+
+out:
+	kfree(text);
+unlock:
+	mutex_unlock(&pm_app_rules_lock);
+	return ret;
+}
+
+static int pm_app_profiles_get(char *buffer, const struct kernel_param *kp)
+{
+	const struct pm_app_rules *apps;
+	int n;
+
+	(void)kp;
+	rcu_read_lock();
+	apps = rcu_dereference(pm_active_apps);
+	n = scnprintf(buffer, 64, "%llu %u\n",
+		      apps ? (unsigned long long)apps->generation : 0ULL,
+		      apps ? apps->count : 0);
+	rcu_read_unlock();
+	return n;
+}
+
+static const struct kernel_param_ops pm_app_profiles_ops = {
+	.set = pm_app_profiles_set,
+	.get = pm_app_profiles_get,
+};
+
+module_param_cb(app_profiles, &pm_app_profiles_ops, NULL, 0600);
+MODULE_PARM_DESC(app_profiles, "Stage and commit per-app rules; read committed generation and count");
 
 static struct kretprobe kp_inode_perm;
 static atomic_t pm_perm_seen = ATOMIC_INIT(0);
@@ -742,7 +1049,7 @@ static int perm_inode_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 	if (atomic_cmpxchg(&pm_perm_seen, 0, 1) == 0)
 		pr_info(PM_LOG_PREFIX "inode_permission hook fired (first time)\n");
 
-	d->matched = should_hide_for_current() && is_target_inode(inode);
+	d->matched = is_target_inode(inode);
 	return 0;
 }
 
@@ -776,7 +1083,7 @@ static int getattr_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 	if (path && path->dentry)
 		inode = d_inode(path->dentry);
 
-	d->matched = should_hide_for_current() && is_target_inode(inode);
+	d->matched = is_target_inode(inode);
 	return 0;
 }
 
@@ -861,16 +1168,38 @@ static bool pm_target_prefix_match(const char *p,
 
 static bool sys_path_matches_target(const char *p)
 {
+	const struct pm_app_rules *apps;
+	struct pm_proc_ids ids;
+	struct pm_query query;
 	unsigned int i;
+	bool matched = false;
 
 	if (!p || p[0] != '/')
 		return false;
-
-	for (i = 0; i < target_count; i++) {
-		if (pm_target_prefix_match(p, &targets[i]))
-			return true;
+	pm_read_proc_ids(&ids);
+	rcu_read_lock();
+	pm_prepare_query(&query, &ids, false);
+	if (query.legacy) {
+		for (i = 0; i < target_count; i++) {
+			if (pm_target_prefix_match(p, &targets[i])) {
+				matched = true;
+				goto out;
+			}
+		}
 	}
-	return false;
+	apps = query.apps;
+	if (apps) {
+		for (i = query.first; i < apps->count && apps->entries[i].uid == query.uid; i++) {
+			if (pm_target_prefix_match(p, &apps->entries[i].target)) {
+				matched = true;
+				break;
+			}
+		}
+	}
+
+out:
+	rcu_read_unlock();
+	return matched;
 }
 
 /*
@@ -888,7 +1217,7 @@ static bool sys_path_match_user_filename(struct pt_regs *regs)
 	char buf[TARGET_TEXT_LEN];
 	long len;
 
-	if (!user_regs || !should_hide_for_current())
+	if (!user_regs || !pm_current_has_targets())
 		return false;
 
 	/*
@@ -898,7 +1227,7 @@ static bool sys_path_match_user_filename(struct pt_regs *regs)
 	 */
 	len = strncpy_from_user(buf, (const char __user *)user_regs->regs[1],
 				sizeof(buf));
-	if (len <= 0)
+	if (len <= 0 || len >= sizeof(buf))
 		return false;
 	buf[sizeof(buf) - 1] = '\0';
 
@@ -1227,13 +1556,13 @@ static bool sys_path_match_user_reg(struct pt_regs *regs, unsigned int regno)
 	char buf[TARGET_TEXT_LEN];
 	long len;
 
-	if (!user_regs || !should_hide_for_current())
+	if (!user_regs || !pm_current_has_targets())
 		return false;
 
 	len = strncpy_from_user(buf,
 				(const char __user *)user_regs->regs[regno],
 				sizeof(buf));
-	if (len <= 0)
+	if (len <= 0 || len >= sizeof(buf))
 		return false;
 	buf[sizeof(buf) - 1] = '\0';
 
@@ -1380,39 +1709,50 @@ static void unregister_write_hooks(void)
 #define GETDENTS_BUF_LIMIT 65536u
 
 static struct kretprobe kp_getdents;
-static bool getdents_registered;
 
 struct getdents_cb_data {
 	struct linux_dirent64 __user *dirent;
-	void *kbuf;
-	size_t kbuf_len;
-	bool scoped;
+	unsigned int fd;
+	unsigned int len;
+	dev_t dir_dev;
+	u64 dir_ino;
+	struct pm_proc_ids ids;
 };
+
+static bool pm_get_directory(unsigned int fd, dev_t *dev, u64 *ino)
+{
+	struct file *file = fget(fd);
+	struct inode *inode;
+	bool known = false;
+
+	if (!file)
+		return false;
+	inode = file_inode(file);
+	if (inode && inode->i_sb && inode->i_ino && S_ISDIR(inode->i_mode)) {
+		*dev = inode->i_sb->s_dev;
+		*ino = inode->i_ino;
+		known = true;
+	}
+	fput(file);
+	return known;
+}
 
 static int getdents_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	struct getdents_cb_data *d = (struct getdents_cb_data *)ri->data;
 	struct pt_regs *user_regs = (struct pt_regs *)regs->regs[0];
-	unsigned int count;
 
 	d->dirent = NULL;
-	d->kbuf = NULL;
-	d->kbuf_len = 0;
-	d->scoped = should_hide_for_current();
-
-	if (!d->scoped || !user_regs)
+	if (!user_regs)
+		return 0;
+	pm_read_proc_ids(&d->ids);
+	if (!pm_has_targets(&d->ids, true))
 		return 0;
 
-	count = (unsigned int)user_regs->regs[2];
-	d->dirent = (struct linux_dirent64 __user *)user_regs->regs[1];
-
-	count = min(count, GETDENTS_BUF_LIMIT);
-	if (!count)
-		return 0;
-
-	d->kbuf = kmalloc(count, GFP_KERNEL);
-	if (d->kbuf)
-		d->kbuf_len = count;
+	d->fd = (unsigned int)user_regs->regs[0];
+	d->len = min((unsigned int)user_regs->regs[2], GETDENTS_BUF_LIMIT);
+	if (d->len && pm_get_directory(d->fd, &d->dir_dev, &d->dir_ino))
+		d->dirent = (struct linux_dirent64 __user *)user_regs->regs[1];
 	return 0;
 }
 
@@ -1421,29 +1761,32 @@ static int getdents_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 	struct getdents_cb_data *d = (struct getdents_cb_data *)ri->data;
 	long ret = regs->regs[0];
 	struct linux_dirent64 *kbuf, *prev, *cur;
+	struct pm_query query;
+	dev_t dev;
+	u64 ino;
 	long bpos, new_len;
 	const size_t hdr_off = offsetof(struct linux_dirent64, d_name);
 	const size_t min_reclen = offsetof(struct linux_dirent64, d_name) + 1;
 	bool modified = false;
 
-	if (ret <= 0 || !d->scoped || !d->dirent || !d->kbuf)
+	if (ret <= 0 || !d->dirent || (size_t)ret > d->len)
+		return 0;
+	/* The fd could have changed while the syscall was running. */
+	if (!pm_get_directory(d->fd, &dev, &ino) || dev != d->dir_dev || ino != d->dir_ino)
+		return 0;
+
+	kbuf = kmalloc(ret, GFP_ATOMIC);
+	if (!kbuf)
+		return 0;
+	if (copy_from_user(kbuf, d->dirent, ret))
 		goto out;
 
-	if ((size_t)ret > d->kbuf_len) {
-		pr_debug_ratelimited(PM_LOG_PREFIX
-				     "getdents return too large (%ld > %zu), skip filtering\n",
-				     ret, d->kbuf_len);
-		goto out;
-	}
-
-	if (copy_from_user(d->kbuf, d->dirent, ret))
-		goto out;
-
-	kbuf = d->kbuf;
 	prev = NULL;
 	bpos = 0;
 	new_len = ret;
 
+	rcu_read_lock();
+	pm_prepare_query(&query, &d->ids, true);
 	while (bpos + (long)hdr_off < new_len) {
 		unsigned short reclen;
 
@@ -1453,11 +1796,10 @@ static int getdents_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 		if (reclen < min_reclen || reclen > new_len - bpos)
 			break;
 
-		if (is_target_ino(cur->d_ino)) {
+		if (pm_match_inode(&query, dev, cur->d_ino, true)) {
 			modified = true;
 			if (prev) {
-				if ((unsigned int)prev->d_reclen + reclen <=
-				    65535u) {
+				if ((unsigned int)prev->d_reclen + reclen <= 65535u) {
 					prev->d_reclen += reclen;
 					bpos += reclen;
 					continue;
@@ -1466,33 +1808,53 @@ static int getdents_exit(struct kretprobe_instance *ri, struct pt_regs *regs)
 
 			new_len -= reclen;
 			if (new_len > bpos)
-				memmove(cur, (char *)cur + reclen,
-					new_len - bpos);
+				memmove(cur, (char *)cur + reclen, new_len - bpos);
 			continue;
 		}
 
 		prev = cur;
 		bpos += reclen;
 	}
+	rcu_read_unlock();
 
 	if (modified) {
 		if (copy_to_user(d->dirent, kbuf, new_len))
-			pr_warn_ratelimited(PM_LOG_PREFIX
-					    "copy_to_user failed, directory may leak\n");
+			pr_warn_ratelimited(PM_LOG_PREFIX "copy_to_user failed\n");
 		else
 			regs->regs[0] = new_len;
 	}
 
 out:
-	kfree(d->kbuf);
-	d->kbuf = NULL;
-	d->kbuf_len = 0;
+	kfree(kbuf);
 	return 0;
+}
+
+static int pm_register_getdents_hook(void)
+{
+	int ret;
+
+	kp_getdents.kp.symbol_name = "__arm64_sys_getdents64";
+	kp_getdents.entry_handler = getdents_entry;
+	kp_getdents.handler = getdents_exit;
+	kp_getdents.data_size = sizeof(struct getdents_cb_data);
+	kp_getdents.maxactive = 20;
+	ret = register_kretprobe(&kp_getdents);
+	if (!ret) {
+		getdents_registered = true;
+		pr_info(PM_LOG_PREFIX "hooked __arm64_sys_getdents64\n");
+	}
+	return ret;
 }
 
 static int __init pathmask_init(void)
 {
-	const char *paths = target_paths[0] ? target_paths : target_path;
+	/*
+	 * profile_mode means service.sh owns the ruleset: never fall back to
+	 * the legacy single-path default, which would hide a path nobody
+	 * configured just because the legacy list is empty.
+	 */
+	const char *paths = target_paths[0] ? target_paths
+					   : (profile_mode ? "" : target_path);
 	int ret;
 
 	ret = pm_symrecon_init();
@@ -1510,6 +1872,9 @@ static int __init pathmask_init(void)
 	ret = parse_deny_uids();
 	if (ret)
 		return ret;
+	if (!deny_uid_count && (active_scope == SCOPE_ALLOW ||
+	    (profile_mode && active_scope == SCOPE_DENY)))
+		paths = "";
 
 	ret = resolve_path_helpers();
 	if (ret) {
@@ -1522,8 +1887,17 @@ static int __init pathmask_init(void)
 
 	ret = resolve_target_paths(paths);
 	if (ret) {
-		pr_err(PM_LOG_PREFIX "no valid targets (err=%d)\n", ret);
-		return ret;
+		/*
+		 * profile_mode means service.sh is about to push per-app rules
+		 * through app_profiles; an empty legacy list is then expected
+		 * rather than an error.
+		 */
+		if (!profile_mode) {
+			pr_err(PM_LOG_PREFIX "no valid targets (err=%d)\n", ret);
+			return ret;
+		}
+		pr_info(PM_LOG_PREFIX
+			"no legacy targets; waiting for per-app rules\n");
 	}
 
 	kp_inode_perm.kp.symbol_name = "inode_permission";
@@ -1578,21 +1952,12 @@ static int __init pathmask_init(void)
 		}
 	}
 
-	if (hide_dirents) {
-		kp_getdents.kp.symbol_name = "__arm64_sys_getdents64";
-		kp_getdents.entry_handler = getdents_entry;
-		kp_getdents.handler = getdents_exit;
-		kp_getdents.data_size = sizeof(struct getdents_cb_data);
-		kp_getdents.maxactive = 20;
-		ret = register_kretprobe(&kp_getdents);
-		if (ret) {
+	if (hide_dirents || profile_mode) {
+		ret = pm_register_getdents_hook();
+		if (ret)
 			pr_warn(PM_LOG_PREFIX
-				"register_kretprobe(__arm64_sys_getdents64) failed: %d; listings may leak\n",
+				"getdents64 filtering unavailable (%d); listings may leak\n",
 				ret);
-		} else {
-			getdents_registered = true;
-			pr_info(PM_LOG_PREFIX "hooked __arm64_sys_getdents64\n");
-		}
 	} else {
 		pr_info(PM_LOG_PREFIX
 			"hide_dirents=0, directory listings are not filtered\n");
@@ -1602,18 +1967,27 @@ static int __init pathmask_init(void)
 		"loaded -- %u target(s) hidden, scope=%s, scope_uid_count=%u hide_isolated=%d enable_syscall_hooks=%d syscall_hooks=\"%s\" write_op_policy=%s\n",
 		target_count, scope_mode, deny_uid_count, hide_isolated,
 		enable_syscall_hooks, syscall_hooks, write_op_policy);
+	mutex_lock(&pm_app_rules_lock);
+	pm_app_rules_ready = true;
+	mutex_unlock(&pm_app_rules_lock);
 	return 0;
 }
 
 static void __exit pathmask_exit(void)
 {
+	mutex_lock(&pm_app_rules_lock);
+	pm_app_rules_ready = false;
+	kvfree(pm_pending_apps);
+	pm_pending_apps = NULL;
+	pm_publish_app_rules(NULL);
+	mutex_unlock(&pm_app_rules_lock);
+
 	unregister_kretprobe(&kp_inode_perm);
 	unregister_kretprobe(&kp_inode_getattr);
 	unregister_syscall_hooks();
 	unregister_write_hooks();
 	if (getdents_registered) {
 		unregister_kretprobe(&kp_getdents);
-		getdents_registered = false;
 	}
 
 	pr_info(PM_LOG_PREFIX "unloaded -- %u target(s) visible again\n",

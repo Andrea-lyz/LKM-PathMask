@@ -29,7 +29,7 @@ window.addEventListener("error", (event) => {
 	const status = document.getElementById("statusText");
 	if (status) {
 		status.textContent = `${trapText("脚本错误：", "Script error: ")}${msg} ${where}`;
-		status.style.color = "#c01c28";
+		status.classList.add("statusError");
 	}
 });
 window.addEventListener("unhandledrejection", (event) => {
@@ -39,7 +39,7 @@ window.addEventListener("unhandledrejection", (event) => {
 	const status = document.getElementById("statusText");
 	if (status) {
 		status.textContent = `${trapText("Promise 错误：", "Promise error: ")}${msg}`;
-		status.style.color = "#c01c28";
+		status.classList.add("statusError");
 	}
 });
 
@@ -120,6 +120,7 @@ const files = {
 	procguardKo: `${MODDIR}/procguard.ko`,
 	procguardConf: `${CONFIGDIR}/procguard.conf`,
 	writeOpPolicy: `${CONFIGDIR}/write_op_policy.conf`,
+	appProfiles: `${CONFIGDIR}/app_profiles.conf`,
 };
 
 let apps = [];
@@ -179,7 +180,71 @@ const EN_TEXT = {
 	"页面": "Pages",
 	"界面语言": "Interface language",
 	"中文界面": "Chinese interface",
-	"遮罩": "Mask",
+	"主页": "Home",
+	"应用": "Apps",
+	"设置": "Settings",
+	"常规": "General",
+	"主导航": "Main navigation",
+	"应用到模块": "Apply to module",
+	"再点一次「应用到模块」确认；规则会写入模块并热重载。": "Click \"Apply to module\" again to confirm; the rules are written and the module is reloaded.",
+	"正在应用逐应用规则...": "Applying per-app rules...",
+	"应用失败：{0}": "Applying failed: {0}",
+	"无法读取模块已有规则，不能应用草稿。可刷新后重试。": "Unable to read the module configuration. Drafts cannot be applied. Refresh to retry.",
+	"没有可应用的草稿；无法确定 Android 用户的草稿未写入。": "No applicable drafts. Drafts without an Android user were not written.",
+	"已确认 {0} 条逐应用路径；{1} 个草稿的 Android 用户未知，未写入。": "The kernel confirmed {0} per-app paths. {1} drafts with an unknown Android user were not written.",
+	"内核已确认 {0} 条逐应用路径，配置已保存。": "The kernel confirmed {0} per-app paths and the configuration was saved.",
+	"模块已有规则": "Module profile",
+	"无法校验现有逐应用配置，未覆盖文件。": "The existing per-app configuration could not be verified. No file was overwritten.",
+	"同一应用的配置已被修改，请备份草稿并重新打开 WebUI。": "This app profile has been changed. Back up the drafts and reopen WebUI.",
+	"合并后的规则无效或超过上限。": "The merged profiles are invalid or exceed the limit.",
+	"无法创建规则暂存文件。": "Unable to create a staging file for the profiles.",
+	"没有收到内核生效确认。": "No confirmation was received from the kernel.",
+	"请输入不超过 255 字节、且不含逗号或分号的非根绝对路径。": "Enter a non-root absolute path of at most 255 bytes without commas or semicolons.",
+	"已安装应用": "Installed apps",
+	"旧版规则": "Legacy rules",
+	"应用草稿前会合并模块已有规则，保留没有修改的应用。": "Applying drafts merges them with the module configuration, preserving other apps.",
+	"搜索名称、包名或 UID": "Search by name, package, or UID",
+	"包含系统应用": "Include system apps",
+	"显示更多": "Show more",
+	"返回应用列表": "Back to app list",
+	"草稿 · 未应用": "Draft · not applied",
+	"应用功能（草稿）": "App features (draft)",
+	"启用此应用配置": "Enable this app profile",
+	"目录列表过滤": "Directory listing filter",
+	"此应用还没有草稿路径。": "This app has no draft paths.",
+	"添加绝对路径": "Add an absolute path",
+	"草稿只保留在本次 WebUI 会话，不会写入或应用到模块。": "Drafts stay in this WebUI session and are never written to or applied by the module.",
+	"撤销更改": "Discard changes",
+	"保存草稿": "Save draft",
+	"有草稿": "Has draft",
+	"无法读取应用列表，请确认已在 KernelSU WebUI 中打开后重试。": "Could not read apps. Open PathMask in KernelSU WebUI and retry.",
+	"没有匹配的应用": "No matching apps",
+	"已显示 {0} 个，共匹配 {1} 个应用": "Showing {0} of {1} matching apps",
+	"这条路径已经添加。": "That path has already been added.",
+	"草稿有未保存的更改": "The draft has unsaved changes",
+	"已保存草稿（未应用）": "Draft saved (not applied)",
+	"草稿备份与升级兼容": "Draft backups and upgrade compatibility",
+	"检查只读取上次加载的旧配置，不会切换模式。": "The check reads the last loaded legacy settings and does not switch modes.",
+	"检查旧版配置": "Check legacy settings",
+	"仅备份已保存的草稿。导入不会覆盖现有草稿或应用规则。": "Backups include saved drafts only. Import does not overwrite existing drafts or apply rules.",
+	"生成草稿备份": "Generate draft backup",
+	"草稿备份 JSON（请复制保留）": "Draft backup JSON (copy and keep)",
+	"粘贴 V2 草稿备份 JSON": "Paste V2 draft backup JSON",
+	"导入草稿": "Import drafts",
+	"尚未读到明确的旧版模式。请刷新页面配置后再检查。": "An explicit legacy mode has not been read. Refresh the settings and check again.",
+	"旧版模式：{0}。路径条目：{1}。": "Legacy mode: {0}. Path entries: {1}.",
+	"包名条目：{0}；直接 UID 条目：{1}。": "Package entries: {0}; direct UID entries: {1}.",
+	"白名单或全局模式不能通过枚举已安装应用等价转换。": "Allowlist or global mode cannot be converted equivalently by enumerating installed apps.",
+	"有 {0} 条路径不是普通绝对路径，需要单独核对。": "{0} path entries are not plain absolute paths and need separate review.",
+	"直接 UID 不能当作应用的持久标识。": "A direct UID is not a permanent app identifier.",
+	"只读预览：未转换任何条目，旧版配置保持原样。": "Read-only preview: nothing was converted and legacy settings are unchanged.",
+	"草稿备份超过大小限制，现有草稿未更改。": "The backup exceeds the size limit. Existing drafts are unchanged.",
+	"不支持此草稿备份版本。已保留输入，没有导入任何内容。": "This draft backup version is unsupported. The input was kept and nothing was imported.",
+	"草稿备份格式不正确，现有草稿未更改。": "The draft backup format is invalid. Existing drafts are unchanged.",
+	"已生成 {0} 个草稿的备份。请复制保存。": "Generated a backup of {0} drafts. Copy it to keep it.",
+	"已导入 {0} 个草稿，保留 {1} 个现有草稿。均未应用。": "Imported {0} drafts and kept {1} existing drafts. None were applied.",
+	"此草稿的路径数量已达上限。": "This draft has reached the path limit.",
+	"当前仍使用旧版配置：所选应用共用这组路径。": "The selected apps still share these paths in the legacy configuration.",
 	"防护": "Guard",
 	"诊断": "Health",
 	"日志": "Logs",
@@ -208,6 +273,7 @@ const EN_TEXT = {
 	// Path rows.
 	"组": "Group",
 	"删": "Del",
+	"删除路径": "Remove path",
 	"可选 OR 组名。同名组内任一行命中即视为该组满足，所有未分组的行仍需各自存在":
 		"Optional OR group name. One hit inside a group satisfies that group; every ungrouped row still has to exist on its own.",
 	"勾选后隐藏匹配项的父目录（dir:）。对随机父目录场景必须勾选":
@@ -976,45 +1042,34 @@ function refreshRenderedText() {
 		lastReport = buildReport(lastSnapshot);
 		$("#reportOutput").value = lastReport;
 	}
+	appDirectory?.refreshText();
 	remeasureChrome();
 }
 
-/*
- * Sticky-offset measurement.
- *
- * `.tabs` sticks below the top bar and `body` reserves room for the
- * fixed footer, but both offsets used to be hardcoded (67px / 92px) and
- * neither matched the rendered layout: the top bar measures ~73px even
- * at 1x, so the tab row sat partly behind it, and it grows further
- * whenever #statusText wraps -- which is exactly what a long bridge or
- * boot error does. System font scaling and the wider English labels make
- * the footer height move too. Measure both and publish them as custom
- * properties so the layout tracks reality instead of a constant.
- */
+/* The sticky bars and fixed footer can wrap in small WebViews or at large text sizes. */
 let applyChromeOffsets = () => {};
 
 function observeChromeOffsets() {
 	const root = document.documentElement;
-	const topbar = $(".topbar");
-	const actions = $(".actions");
+	const measurements = [
+		[$(".topbar"), "--topbar-h"],
+		[$(".tabs"), "--tabs-h"],
+		[$(".actions"), "--actions-h"],
+	].filter(([element]) => element);
 
 	applyChromeOffsets = () => {
-		if (topbar) root.style.setProperty("--topbar-h", `${Math.ceil(topbar.offsetHeight)}px`);
-		if (actions) root.style.setProperty("--actions-h", `${Math.ceil(actions.offsetHeight)}px`);
+		for (const [element, name] of measurements) {
+			root.style.setProperty(name, element.offsetHeight + "px");
+		}
 	};
 	applyChromeOffsets();
 
-	// ResizeObserver is Chrome 64+; every WebView that can run this
-	// page has it, but jsdom and ancient builds do not, and a static
-	// measurement plus a resize listener is still far better than the
-	// constant it replaces.
 	if (typeof ResizeObserver === "undefined") {
 		window.addEventListener("resize", applyChromeOffsets);
 		return;
 	}
-	const observer = new ResizeObserver(() => applyChromeOffsets());
-	if (topbar) observer.observe(topbar);
-	if (actions) observer.observe(actions);
+	const observer = new ResizeObserver(applyChromeOffsets);
+	for (const [element] of measurements) observer.observe(element);
 }
 
 function remeasureChrome() {
@@ -1196,7 +1251,7 @@ async function runAction(message, action) {
 
 	setBusy(true, message);
 	try {
-		await action();
+		return await action();
 	} catch (error) {
 		showToast(error.message);
 		throw error;
@@ -1483,25 +1538,36 @@ function addPathRow(value = "", options = {}) {
 
 	const input = document.createElement("input");
 	input.type = "text";
+	input.className = "pathRowPath";
 	input.value = path;
 
+	const groupField = document.createElement("label");
+	groupField.className = "pathRowGroupField";
+	const groupLabel = document.createElement("span");
+	groupLabel.className = "pathRowFieldLabel";
+	groupLabel.setAttribute("aria-hidden", "true");
 	const groupInput = document.createElement("input");
 	groupInput.type = "text";
 	groupInput.className = "pathRowGroup";
 	groupInput.value = group;
+	groupField.append(groupLabel, groupInput);
 
 	const dirToggle = document.createElement("label");
 	dirToggle.className = "pathRowDirToggle";
 	const dirCheckbox = document.createElement("input");
 	dirCheckbox.type = "checkbox";
 	dirCheckbox.checked = useParent;
-	dirToggle.append(dirCheckbox);
+	const dirLabel = document.createElement("span");
+	dirLabel.className = "pathRowFieldLabel";
+	dirLabel.setAttribute("aria-hidden", "true");
+	dirToggle.append(dirCheckbox, dirLabel);
 
 	const remove = document.createElement("button");
 	remove.type = "button";
+	remove.className = "textButton";
 	remove.addEventListener("click", () => row.remove());
 
-	row.append(input, groupInput, dirToggle, remove);
+	row.append(input, groupField, dirToggle, remove);
 	applyPathRowText(row);
 	pathList.append(row);
 	/*
@@ -1529,15 +1595,24 @@ function applyPathRowText(row) {
 	const groupInput = inputs[1];
 	const dirToggle = row.querySelector(".pathRowDirToggle");
 	const remove = row.querySelector("button");
-	if (pathInput) pathInput.placeholder = t("/system/app/example 或 /dev/???/marker");
+	if (pathInput) {
+		pathInput.placeholder = t("/system/app/example 或 /dev/???/marker");
+		pathInput.setAttribute("aria-label", t("路径"));
+	}
 	if (groupInput) {
-		groupInput.placeholder = t("组");
+		groupInput.setAttribute("aria-label", t("组"));
+		groupInput.parentElement.querySelector(".pathRowFieldLabel").textContent = t("组");
 		groupInput.title = t("可选 OR 组名。同名组内任一行命中即视为该组满足，所有未分组的行仍需各自存在");
 	}
 	if (dirToggle) {
+		dirToggle.querySelector("input").setAttribute("aria-label", t("父级"));
+		dirToggle.querySelector(".pathRowFieldLabel").textContent = t("父级");
 		dirToggle.title = t("勾选后隐藏匹配项的父目录（dir:）。对随机父目录场景必须勾选");
 	}
-	if (remove) remove.textContent = t("删");
+	if (remove) {
+		remove.textContent = t("删");
+		remove.setAttribute("aria-label", t("删除路径"));
+	}
 }
 
 function collectPaths() {
@@ -1696,25 +1771,24 @@ function parseBridgeJson(value) {
 	}
 }
 
-function loadAppsFromNativeBridge(bridge) {
-	const showSystem = $("#showSystemInput").checked;
+function loadAppsFromNativeBridge(bridge, showSystem) {
 	const names = parseBridgeJson(bridge.listPackages(showSystem ? "all" : "user"));
-	if (!names || names.length === 0) return null;
+	if (!names) return null;
+	if (!names.length) return [];
 	const infos = parseBridgeJson(bridge.getPackagesInfo(JSON.stringify(names)));
-	if (!infos || infos.length === 0) return null;
-	return infos
-		.filter((info) => info && info.packageName)
-		.map((info) => ({
+	if (!infos?.length) return null;
+	const rows = infos
+		.filter(info => typeof info?.packageName === "string" && info.packageName)
+		.map(info => ({
 			pkg: info.packageName,
-			uid: info.uid === undefined || info.uid === null ? "" : String(info.uid),
-			label: info.appLabel || "",
+			uid: info.uid == null ? "" : String(info.uid),
+			label: typeof info.appLabel === "string" ? info.appLabel : "",
 			system: !!info.isSystem,
-		}))
-		.sort((a, b) => a.pkg.localeCompare(b.pkg));
+		}));
+	return rows.length ? rows.sort((a, b) => a.pkg.localeCompare(b.pkg)) : null;
 }
 
-async function loadAppsFromShell() {
-	const showSystem = $("#showSystemInput").checked;
+async function loadAppsFromShell(showSystem) {
 	const command = showSystem ? "pm list packages -U" : "pm list packages -U -3";
 	const output = await execShell(command);
 	return output.split(/\r?\n/)
@@ -1723,27 +1797,27 @@ async function loadAppsFromShell() {
 		.sort((a, b) => a.pkg.localeCompare(b.pkg));
 }
 
-async function loadApps() {
-	statusText.textContent = t("正在加载应用...");
+// Both the application directory and the legacy editor use the same
+// read-only package reader, but keep separate filters and UI state.
+async function readInstalledApps(showSystem) {
 	const bridge = getKsuBridge();
-	let next = null;
-	if (bridge && typeof bridge.listPackages === "function" &&
-	    typeof bridge.getPackagesInfo === "function") {
+	if (typeof bridge?.listPackages === "function" && typeof bridge?.getPackagesInfo === "function") {
 		try {
-			next = loadAppsFromNativeBridge(bridge);
-		} catch (error) {
-			// A manager that advertises the API but throws on it
-			// (or returns something unparseable) still has a working
-			// exec bridge, so fall through rather than failing the
-			// whole panel.
-			next = null;
+			const rows = loadAppsFromNativeBridge(bridge, showSystem);
+			if (rows !== null) return rows;
+		} catch (_) {
+			// Older managers may expose but fail to implement the native reader.
 		}
 	}
-	if (!next) next = await loadAppsFromShell();
-	apps = next;
+	return loadAppsFromShell(showSystem);
+}
+
+async function loadApps() {
+	statusText.textContent = t("正在加载应用...");
+	apps = await readInstalledApps($("#showSystemInput").checked);
 	appList.scrollTop = 0;
 	renderApps();
-	showToast(t(`已加载 {0} 个应用`, [apps.length]));
+	showToast(t("已加载 {0} 个应用", [apps.length]));
 }
 
 function renderHealth(items) {
@@ -3896,7 +3970,7 @@ async function persistConfigFiles() {
  * running here and waiting that long would just look like a hung WebUI.
  */
 function reloadCommand() {
-	return `if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`;
+	return `if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; rc=$?; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30; exit "$rc"`;
 }
 
 // write_op_policy is an insmod parameter fed by service.sh from the
@@ -4206,29 +4280,39 @@ async function selectHistory(path, liElem) {
 	$("#historyView").value = text || t("(空)");
 }
 
-/*
- * Tab switching. The buttons are role=tab in a role=tablist, so the ARIA
- * state has to move with the visual state: aria-selected for screen
- * readers, and a roving tabindex so the strip is one stop in the tab
- * order with the arrow keys moving inside it. Without the roving part,
- * keyboard users had to Tab through all five tabs to get past the
- * header, and nothing announced which panel was open.
- */
+// Settings keeps its last subpage, while the Dock tracks only the three top-level destinations.
+let activePage = "home";
+let settingsTab = "general";
+
 function switchTab(tab, options = {}) {
-	const focus = options.focus !== false;
-	const buttons = $$(".tab");
+	if (tab === "apps" && !appDirectory) tab = "config";
+	if (tab === "settings") tab = settingsTab;
+	const page = tab === "home" ? "home" : ["apps", "appDetail", "config"].includes(tab) ? "apps" : "settings";
+	if (page === "settings") settingsTab = tab;
+	$("#settingsShell").hidden = page !== "settings";
+	$(".actions").hidden = tab !== "config" && tab !== "general";
+
 	let target = null;
-	for (const button of buttons) {
-		const active = button.dataset.tab === tab;
+	for (const button of $$(".tab")) {
+		const active = button.dataset.tab === settingsTab;
 		button.classList.toggle("active", active);
 		button.setAttribute("aria-selected", String(active));
 		button.tabIndex = active ? 0 : -1;
 		if (active) target = button;
 	}
 	for (const panel of $$(".tabPanel")) {
-		panel.classList.toggle("active", panel.id === `${tab}Panel`);
+		panel.classList.toggle("active", panel.id === tab + "Panel");
 	}
-	if (focus && target) target.focus();
+	for (const button of $$("[data-dock-page]")) {
+		if (button.dataset.dockPage === page) button.setAttribute("aria-current", "page");
+		else button.removeAttribute("aria-current");
+	}
+	if (activePage !== tab) document.scrollingElement?.scrollTo?.(0, 0);
+	activePage = tab;
+	remeasureChrome();
+	glassDock?.sync();
+	if (tab === "apps") appDirectory?.showList();
+	if (options.focus !== false && page === "settings" && target) target.focus();
 }
 
 // Sync ARIA from the classes the markup ships with, without moving
@@ -4428,6 +4512,12 @@ for (const button of $$(".tab")) {
 	button.addEventListener("click", () => switchTab(button.dataset.tab, { focus: false }));
 }
 
+for (const button of $$("[data-dock-page]")) {
+	button.addEventListener("click", () => {
+		switchTab(button.dataset.dockPage, { focus: false });
+	});
+}
+
 const tabGroup = $(".tabGroup");
 if (tabGroup) {
 	tabGroup.addEventListener("keydown", (event) => {
@@ -4478,6 +4568,120 @@ initTabs();
 // After applyStaticText: the translated labels are what set the final
 // top bar and footer heights.
 observeChromeOffsets();
+const glassDock = window.PathMaskGlass?.mountDock($("#mainDock"));
+window.PathMaskGlass?.mountSurface($(".topbar"), "liquid-glass-topbar");
+window.PathMaskGlass?.mountSurface($(".actions"), "liquid-glass-actions");
+// Read the checked bytes and fingerprint from the same snapshot. Neither a
+// broken read nor a malformed on-disk ruleset is treated as an empty one.
+function appProfileSnapshotShell() {
+	return `cfg=${shellQuote(files.appProfiles)}
+profile_snapshot() {
+	if [ ! -e "$cfg" ] && [ ! -L "$cfg" ]; then
+		fingerprint=missing
+		encoded=''
+		return 0
+	fi
+	[ -f "$cfg" ] && [ ! -L "$cfg" ] || return 1
+	size=$(wc -c < "$cfg") && [ "$size" -le 131072 ] || return 1
+	encoded=$(base64 < "$cfg") || return 1
+	checksum=$(printf '%s' "$encoded" | sha256sum) || return 1
+	fingerprint="\${checksum%% *}"
+}`;
+}
+
+async function readAppProfileConfig() {
+	const output = await execShell(`${appProfileSnapshotShell()}
+profile_snapshot || exit 22
+printf '%s\n%s' "$fingerprint" "$encoded"`);
+	const match = /^(missing|[a-f0-9]{64})(?:\r?\n([\s\S]*))?$/.exec(output);
+	const codec = window.PathMaskProfileDrafts;
+	if (match && codec) {
+		try {
+			const bytes = Uint8Array.from(atob(match[2] || ""), ch => ch.charCodeAt(0));
+			const profiles = codec.decodeRules(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+			if (profiles) return { fingerprint: match[1], profiles };
+		} catch (_) {
+			// Invalid encoding is not safe to replace with a newly saved file.
+		}
+	}
+	throw new Error(t("无法校验现有逐应用配置，未覆盖文件。"));
+}
+
+async function applyAppProfileChanges(changes, baseline) {
+	if (busy) throw new Error(t("正在处理，请稍等"));
+	return runAction(t("正在应用逐应用规则..."), async () => {
+		const { fingerprint, profiles } = await readAppProfileConfig();
+		for (const [key, value] of changes) {
+			if (JSON.stringify(profiles.get(key)) !== JSON.stringify(baseline.get(key)))
+				throw new Error(t("同一应用的配置已被修改，请备份草稿并重新打开 WebUI。"));
+			profiles.set(key, value);
+		}
+		const result = window.PathMaskProfileDrafts.encodeRules(profiles);
+		if (!result) throw new Error(t("合并后的规则无效或超过上限。"));
+
+		const prefix = CONFIGDIR + "/.profile-write.";
+		const work = (await execShell(`umask 077; mkdir -p ${shellQuote(CONFIGDIR)} && mktemp -d ${shellQuote(prefix + "XXXXXX")}`)).trim();
+		if (!work.startsWith(prefix) || !/^[a-zA-Z0-9]{6}$/.test(work.slice(prefix.length)))
+			throw new Error(t("无法创建规则暂存文件。"));
+		const candidate = work + "/candidate";
+		const cleanup = `rm -f ${shellQuote(candidate)}; rmdir ${shellQuote(work)} 2>/dev/null`;
+		let handedOff = false;
+		try {
+			await execShell(`umask 077; : > ${shellQuote(candidate)}`);
+			// Keep command strings below the bridge and Android argv limits.
+			const lines = result.text.match(/[^\n]*\n/g) || [];
+			for (let i = 0; i < lines.length; i += 24) {
+				const chunk = lines.slice(i, i + 24).join("");
+				await execShell(`printf '%s' ${shellQuote(chunk)} >> ${shellQuote(candidate)}`);
+			}
+			// After handoff the shell owns cleanup even if the bridge times out.
+			handedOff = true;
+			const output = await execShell(`${appProfileSnapshotShell()}
+lock=${shellQuote(CONFIGDIR + "/.profile-apply-lock")}
+owned=0
+finish() {
+	${cleanup} || true
+	if [ "$owned" = 1 ]; then rmdir "$lock" 2>/dev/null || true; fi
+}
+trap finish EXIT
+mkdir "$lock" || exit 23
+owned=1
+expected=${shellQuote(fingerprint)}
+profile_snapshot && [ "$fingerprint" = "$expected" ] || exit 24
+candidate=${shellQuote(candidate)}
+sh ${shellQuote(files.service)} --check-app-profiles "$candidate" || exit 25
+request="$(date +%s)$$"
+export PATHMASK_PROFILE_REQUEST="$request" PATHMASK_APP_PROFILES_STAGE="$candidate"
+output=$(${reloadCommand()}) || { printf '%s\n' "$output" >&2; exit 26; }
+printf '%s\n' "$output" | grep -Fxq "PATHMASK_APP_PROFILES_OK $request ${result.pathCount}" || exit 27
+profile_snapshot && [ "$fingerprint" = "$expected" ] || exit 24
+mv "$candidate" "$cfg" || exit 28
+printf '%s\n' "$output"`);
+			if (!new RegExp("^PATHMASK_APP_PROFILES_OK [0-9]+ " + result.pathCount + "$", "m").test(output))
+				throw new Error(t("没有收到内核生效确认。"));
+			setLogContent("kernel", output);
+			return { profiles, pathCount: result.pathCount };
+		} finally {
+			if (!handedOff) await execShell(cleanup).catch(() => {});
+		}
+	});
+}
+
+const appDirectory = window.PathMaskAppDirectory?.mount({
+	t,
+	readApps: readInstalledApps,
+	matches: appMatchesQuery,
+	getLegacySnapshot: () => lastSnapshot,
+	navigate: tab => switchTab(tab, { focus: false }),
+	readProfiles: async () => (await readAppProfileConfig()).profiles,
+	applyProfiles: applyAppProfileChanges,
+});
+if (!appDirectory) {
+	// A stale or missing optional WebUI asset must not lock users out of legacy rules.
+	$("#dock-apps")?.setAttribute("aria-controls", "configPanel");
+	const back = $("#legacyBackBtn");
+	if (back) back.hidden = true;
+}
 
 try {
 	runAction(t("正在读取配置..."), refreshConfig).then(() => {

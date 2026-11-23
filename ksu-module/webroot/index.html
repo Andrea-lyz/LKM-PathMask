@@ -2,45 +2,54 @@
 <html lang="zh-CN">
 <head>
 	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 	<title>PathMask v2.8.3</title>
+	<link rel="stylesheet" href="./theme.css">
 	<link rel="stylesheet" href="./style.css">
+	<link rel="stylesheet" href="./app-directory.css">
+	<link rel="stylesheet" href="./liquid-glass.css">
 </head>
 <body>
-	<header class="topbar">
-		<div>
-			<h1><span>PathMask</span><small>v2.8.3</small></h1>
-			<p id="statusText" data-i18n>正在读取状态...</p>
-		</div>
-		<div class="topActions">
-			<button id="donateBtn" class="topTextButton" type="button" data-i18n>捐赠</button>
-			<button id="refreshBtn" class="topTextButton" type="button" data-i18n>刷新</button>
-			<a class="iconButton" href="https://github.com/Andrea-lyz/LKM-PathMask" target="_blank" rel="noopener" aria-label="打开 GitHub 项目" data-i18n-aria-label title="打开 GitHub 项目" data-i18n-title>
-				<svg viewBox="0 0 24 24" aria-hidden="true">
-					<path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.02c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.08 1.84 2.82 1.31 3.51 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23A11.47 11.47 0 0 1 12 5.8c1.02 0 2.04.14 3 .41 2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 .5Z"/>
-				</svg>
-			</a>
+	<header class="topbar liquidGlass liquidSurface">
+		<div class="chromeInner topbarInner">
+			<div class="appIdentity">
+				<span class="appMark" aria-hidden="true">
+					<svg viewBox="0 0 24 24" focusable="false">
+						<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm4 8 3-3m1 3 3-3m1 3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+					</svg>
+				</span>
+				<div class="appHeading">
+					<h1><span>PathMask</span><small>v2.8.3</small></h1>
+					<p id="statusText" data-i18n>正在读取状态...</p>
+				</div>
+			</div>
+			<div class="topActions">
+				<button id="donateBtn" class="topTextButton" type="button" title="捐赠" data-i18n-title>
+					<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+						<path d="m12 20.5-7.2-7.1a4.6 4.6 0 0 1 6.5-6.5l.7.7.7-.7a4.6 4.6 0 0 1 6.5 6.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+					</svg>
+					<span data-i18n>捐赠</span>
+				</button>
+				<button id="refreshBtn" class="topTextButton" type="button" title="刷新" data-i18n-title>
+					<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+						<path d="M20 10a8 8 0 1 0-1.7 7M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+					</svg>
+					<span data-i18n>刷新</span>
+				</button>
+				<a class="iconButton" href="https://github.com/Andrea-lyz/LKM-PathMask" target="_blank" rel="noopener" aria-label="打开 GitHub 项目" data-i18n-aria-label title="打开 GitHub 项目" data-i18n-title>
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.02c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.08 1.84 2.82 1.31 3.51 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23A11.47 11.47 0 0 1 12 5.8c1.02 0 2.04.14 3 .41 2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 .5Z"/>
+					</svg>
+				</a>
+			</div>
 		</div>
 	</header>
 
-	<nav class="tabs">
-		<div class="tabGroup" role="tablist" aria-label="页面" data-i18n-aria-label>
-			<button class="tab active" role="tab" id="tab-config" aria-controls="configPanel" aria-selected="true" tabindex="0" type="button" data-tab="config" data-i18n>遮罩</button>
-			<button class="tab" role="tab" id="tab-procguard" aria-controls="procguardPanel" aria-selected="false" tabindex="-1" type="button" data-tab="procguard" data-i18n>防护</button>
-			<button class="tab" role="tab" id="tab-diagnosis" aria-controls="diagnosisPanel" aria-selected="false" tabindex="-1" type="button" data-tab="diagnosis" data-i18n>诊断</button>
-			<button class="tab" role="tab" id="tab-logs" aria-controls="logsPanel" aria-selected="false" tabindex="-1" type="button" data-tab="logs" data-i18n>日志</button>
-			<button class="tab" role="tab" id="tab-report" aria-controls="reportPanel" aria-selected="false" tabindex="-1" type="button" data-tab="report" data-i18n>报告</button>
-		</div>
-		<div class="langSwitch" role="group" aria-label="界面语言" data-i18n-aria-label>
-			<button class="langOption active" type="button" data-lang="zh" lang="zh-CN" aria-label="中文界面" data-i18n-aria-label>中</button>
-			<button class="langOption" type="button" data-lang="en" lang="en" aria-label="英文界面" data-i18n-aria-label>EN</button>
-		</div>
-	</nav>
-
 	<main>
-		<section id="configPanel" class="tabPanel active" role="tabpanel" aria-labelledby="tab-config" tabindex="0">
-			<section class="summaryGrid" aria-label="状态总览" data-i18n-aria-label>
-				<div class="metric">
+		<section id="homePanel" class="tabPanel active" aria-labelledby="dock-home" tabindex="-1">
+			<section class="summaryGrid" aria-labelledby="summaryTitle">
+				<h2 id="summaryTitle" class="summaryTitle" data-i18n>状态总览</h2>
+				<div class="metric metricEmphasis">
 					<span data-i18n>模块状态</span>
 					<strong id="moduleState" data-i18n>未知</strong>
 				</div>
@@ -57,6 +66,103 @@
 					<strong id="uidCount">0</strong>
 				</div>
 			</section>
+		</section>
+
+		<section id="appsPanel" class="tabPanel" aria-labelledby="dock-apps" tabindex="-1">
+			<div class="directoryBar">
+				<h1 data-i18n>已安装应用</h1>
+				<div class="inlineControls">
+					<button id="applyProfilesBtn" type="button" class="tonal" data-i18n>应用到模块</button>
+					<button id="openLegacyRulesBtn" type="button" class="textButton" data-i18n>旧版规则</button>
+				</div>
+			</div>
+			<p class="hint directoryNotice" data-i18n>应用草稿前会合并模块已有规则，保留没有修改的应用。</p>
+			<section class="panel directoryPanel" aria-labelledby="dock-apps">
+				<input id="directorySearch" type="search" aria-label="搜索名称、包名或 UID" data-i18n-aria-label placeholder="搜索名称、包名或 UID" data-i18n-placeholder autocomplete="off">
+				<div class="directoryBar">
+					<label class="miniToggle"><input id="directorySystemInput" type="checkbox"><span data-i18n>包含系统应用</span></label>
+					<button id="refreshDirectoryBtn" type="button" class="textButton" data-i18n>刷新</button>
+				</div>
+				<p id="directoryStatus" class="hint" role="status" aria-live="polite"></p>
+				<p id="profileApplyState" class="hint" role="status" aria-live="polite"></p>
+				<ul id="directoryList" class="directoryList" hidden></ul>
+				<button id="directoryMoreBtn" type="button" class="textButton" hidden data-i18n>显示更多</button>
+			</section>
+			<details class="panel subPanel directoryCompatibility">
+				<summary data-i18n>草稿备份与升级兼容</summary>
+				<div class="directoryPanel">
+					<p class="hint" data-i18n>检查只读取上次加载的旧配置，不会切换模式。</p>
+					<button id="previewLegacyMigrationBtn" type="button" class="tonal" data-i18n>检查旧版配置</button>
+					<p id="legacyMigrationPreview" class="hint directoryMultiline" role="status" hidden></p>
+					<p class="hint" data-i18n>仅备份已保存的草稿。导入不会覆盖现有草稿或应用规则。</p>
+					<button id="exportAppDraftsBtn" type="button" data-i18n>生成草稿备份</button>
+					<label id="appDraftBackupOutputLabel" for="appDraftBackupOutput" class="hint" hidden data-i18n>草稿备份 JSON（请复制保留）</label>
+					<textarea id="appDraftBackupOutput" class="monoBox" rows="6" aria-labelledby="appDraftBackupOutputLabel" readonly hidden></textarea>
+					<label for="appDraftBackupInput" class="hint" data-i18n>粘贴 V2 草稿备份 JSON</label>
+					<textarea id="appDraftBackupInput" class="monoBox" rows="5" aria-describedby="appDraftBackupStatus" spellcheck="false"></textarea>
+					<button id="importAppDraftsBtn" type="button" class="tonal" data-i18n>导入草稿</button>
+					<p id="appDraftBackupStatus" class="hint" role="status" aria-live="polite"></p>
+				</div>
+			</details>
+		</section>
+
+		<section id="appDetailPanel" class="tabPanel" aria-labelledby="detailAppName" tabindex="-1">
+			<div class="directoryBar">
+				<button id="directoryBackBtn" type="button" class="textButton" data-i18n>返回应用列表</button>
+				<span class="directoryBadge" data-i18n>草稿 · 未应用</span>
+			</div>
+			<div class="directoryIdentity">
+				<span id="detailAppIcon" class="directoryIcon directoryIconLarge" aria-hidden="true"></span>
+				<div class="directoryInfo">
+					<h1 id="detailAppName" tabindex="-1"></h1>
+					<p id="detailAppPackage" class="hint"></p>
+					<p id="detailAppUid" class="hint"></p>
+				</div>
+			</div>
+			<section class="panel directoryPanel" aria-labelledby="profileOptionsTitle">
+				<h2 id="profileOptionsTitle" data-i18n>应用功能（草稿）</h2>
+				<label class="switchRow directorySwitch"><span data-i18n>启用此应用配置</span><input id="draftEnabled" type="checkbox" role="switch"></label>
+				<label class="switchRow directorySwitch"><span data-i18n>目录列表过滤</span><input id="draftDirectoryFilter" type="checkbox" role="switch"></label>
+			</section>
+			<section class="panel directoryPanel" aria-labelledby="draftPathsTitle">
+				<div class="directoryBar"><h2 id="draftPathsTitle" data-i18n>隐藏路径</h2><span id="draftPathCount" class="directoryBadge"></span></div>
+				<p id="draftPathEmpty" class="hint" hidden data-i18n>此应用还没有草稿路径。</p>
+				<ul id="draftPathList" class="directoryPathList"></ul>
+				<form id="draftPathForm" class="directoryPanel" novalidate>
+					<label for="draftPathInput" class="hint" data-i18n>添加绝对路径</label>
+					<div class="directoryPathEntry"><input id="draftPathInput" type="text" aria-describedby="draftPathError" maxlength="768" autocomplete="off" spellcheck="false" placeholder="/data/local/tmp/example.txt"><button type="submit" class="tonal" data-i18n>添加</button></div>
+					<p id="draftPathError" class="hint directoryError" role="status" hidden></p>
+				</form>
+			</section>
+			<p class="hint directoryNotice" data-i18n>草稿只保留在本次 WebUI 会话，不会写入或应用到模块。</p>
+			<p id="draftSaveState" class="hint" role="status" aria-live="polite"></p>
+			<div class="directoryActions">
+				<button id="discardDraftChangesBtn" class="textButton" type="button" disabled data-i18n>撤销更改</button>
+				<button id="saveAppDraftBtn" type="button" class="primary" disabled data-i18n>保存草稿</button>
+			</div>
+		</section>
+
+		<section id="configPanel" class="tabPanel" aria-labelledby="dock-apps" tabindex="-1">
+			<div class="directoryBar">
+				<h1 data-i18n>旧版规则</h1>
+				<button id="legacyBackBtn" type="button" class="textButton" data-i18n>返回应用列表</button>
+			</div>
+			<section class="panel">
+				<div class="sectionTitle">
+					<h2 id="packagePanelTitle" data-i18n>应用黑名单</h2>
+					<div class="inlineControls">
+						<label class="miniToggle">
+							<input id="showSystemInput" type="checkbox">
+							<span data-i18n>系统应用</span>
+						</label>
+						<button id="loadAppsBtn" class="tonal" type="button" data-i18n>加载</button>
+					</div>
+				</div>
+				<input id="searchInput" type="search" aria-label="搜索包名" data-i18n-aria-label placeholder="搜索包名" data-i18n-placeholder>
+				<p id="scopeListHint" class="hint" data-i18n>黑名单模式：勾选的应用会看不到隐藏路径。</p>
+				<p id="appListCount" class="hint appListCount" aria-live="polite"></p>
+				<div id="appList" class="appList"></div>
+			</section>
 
 			<section class="panel">
 				<div class="sectionTitle">
@@ -67,7 +173,7 @@
 								<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm-1-3h2v-6h-2v6zm0-8h2V7h-2v2z"/>
 							</svg>
 						</button>
-						<button id="addPathBtn" type="button" data-i18n>添加</button>
+						<button id="addPathBtn" class="tonal" type="button" data-i18n>添加</button>
 					</div>
 				</div>
 				<label class="switchRow autoSceneRow">
@@ -75,7 +181,7 @@
 						自动识别 Scene debugfs
 						<small id="autoSceneDebugfsStatus" class="hint" hidden></small>
 					</span>
-					<input id="autoSceneDebugfsInput" type="checkbox">
+					<input id="autoSceneDebugfsInput" type="checkbox" role="switch">
 				</label>
 				<div class="pathRowHeader" aria-hidden="true">
 					<span data-i18n>路径</span>
@@ -84,13 +190,14 @@
 					<span></span>
 				</div>
 				<div id="pathList" class="stack"></div>
+				<p class="hint" data-i18n>当前仍使用旧版配置：所选应用共用这组路径。</p>
 			</section>
 
 			<section class="panel">
 				<div class="sectionTitle">
-					<h2 data-i18n>作用范围</h2>
+					<h2 id="scopeTitle" data-i18n>作用范围</h2>
 				</div>
-				<div class="segmented">
+				<div class="segmented" role="group" aria-labelledby="scopeTitle">
 					<label>
 						<input type="radio" name="scope" value="global">
 						<span data-i18n>全局</span>
@@ -110,56 +217,15 @@
 							在父目录的 <code>ls</code> 结果里抹掉这一行（hook <code>getdents64</code>），让上级目录看起来更"干净"。<strong>不影响</strong>父目录本身是否存在，也跟下方路径行里的「父级」是两件事。
 						</small>
 					</span>
-					<input id="hideDirentsInput" type="checkbox">
+					<input id="hideDirentsInput" type="checkbox" role="switch">
 				</label>
-				<label class="switchRow">
-					<span data-i18n-lead>
-						syscall 兜底
-						<small class="hint" data-i18n-html>
-							用 kretprobe 拦下 stat / access / readlink / openat 等 7 个 arm64 syscall 入口，绕开 ThinLTO 内联导致的 hook 漏触发。默认勾上 6 个，唯独不挂 <code>faccessat</code>（实测 Holmes "Abnormal Environment 04" 通过 <code>access(F_OK)</code> 时序识别这一个 syscall 的 trampoline 开销）。
-						</small>
-					</span>
-					<input id="enableSyscallHooksInput" type="checkbox">
-				</label>
-				<details id="syscallHooksDetails" class="subPanel">
-					<summary data-i18n>选择具体 syscall（高级）</summary>
-					<small class="hint" data-i18n-html>
-						取消勾选某项即不挂对应的 kretprobe。<strong>不推荐勾选 <code>faccessat</code></strong>：会触发 Holmes 04，且大多数应用的 <code>access(path)</code> 在 flag=0 时走的是 <code>faccessat2</code>，<code>faccessat</code> 主要被 timing 探测器使用。
-					</small>
-					<div class="syscallList">
-						<label class="syscallRow"><input type="checkbox" data-syscall="newfstatat"><span>newfstatat<small>stat() / lstat()</small></span></label>
-						<label class="syscallRow"><input type="checkbox" data-syscall="statx"><span>statx<small>statx()</small></span></label>
-						<label class="syscallRow"><input type="checkbox" data-syscall="faccessat"><span>faccessat <em data-i18n>不推荐</em><small data-i18n>access(path), F_OK 时序探测面</small></span></label>
-						<label class="syscallRow"><input type="checkbox" data-syscall="faccessat2"><span>faccessat2<small>access(path, flag≠0)</small></span></label>
-						<label class="syscallRow"><input type="checkbox" data-syscall="readlinkat"><span>readlinkat<small>readlink()</small></span></label>
-						<label class="syscallRow"><input type="checkbox" data-syscall="openat"><span>openat<small data-i18n>open() 主路径</small></span></label>
-						<label class="syscallRow"><input type="checkbox" data-syscall="openat2"><span>openat2<small data-i18n>open() 新接口</small></span></label>
-					</div>
-				</details>
 			</section>
 
 			<section class="panel">
 				<div class="sectionTitle">
-					<h2 id="packagePanelTitle" data-i18n>应用黑名单</h2>
-					<div class="inlineControls">
-						<label class="miniToggle">
-							<input id="showSystemInput" type="checkbox">
-							<span data-i18n>系统应用</span>
-						</label>
-						<button id="loadAppsBtn" type="button" data-i18n>加载</button>
-					</div>
+					<h2 id="uidTitle" data-i18n>直接填写 UID</h2>
 				</div>
-				<input id="searchInput" class="search" type="search" placeholder="搜索包名" data-i18n-placeholder>
-				<p id="scopeListHint" class="hint" data-i18n>黑名单模式：勾选的应用会看不到隐藏路径。</p>
-				<p id="appListCount" class="hint appListCount" aria-live="polite"></p>
-				<div id="appList" class="appList"></div>
-			</section>
-
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>直接填写 UID</h2>
-				</div>
-				<textarea id="denyUidsInput" rows="4" spellcheck="false" placeholder="每行一个 UID" data-i18n-placeholder></textarea>
+				<textarea id="denyUidsInput" aria-labelledby="uidTitle" rows="4" spellcheck="false" placeholder="每行一个 UID" data-i18n-placeholder></textarea>
 				<details id="allowSystemUidsDetails" class="subPanel">
 					<summary data-i18n>白名单系统 UID 放行</summary>
 					<small class="hint" data-i18n-html>
@@ -172,140 +238,203 @@
 					</div>
 				</details>
 			</section>
-
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>开机等待秒数</h2>
-				</div>
-				<label class="switchRow">
-					<span data-i18n>路径出现 + 包名解析的总等待秒数</span>
-					<input id="waitSecondsInput" type="number" min="1" max="600" step="1" inputmode="numeric" value="60">
-				</label>
-				<p class="hint" data-i18n>默认 60 秒。开机时 service.sh 会用这一段时间等待隐藏路径出现，并在 deny / allow 模式下等待包名解析为 UID。两个阶段共用同一段预算，到期就跳过加载。包名解析慢的设备可以调大。</p>
-			</section>
 		</section>
 
-		<section id="procguardPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-procguard" tabindex="0">
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>隔离防护</h2>
+		<section id="settingsShell" class="settingsShell" aria-labelledby="dock-settings" hidden>
+			<nav class="tabs settingsTabs">
+				<div class="tabGroup" role="tablist" aria-label="页面" data-i18n-aria-label>
+					<button class="tab active" role="tab" id="tab-general" aria-controls="generalPanel" aria-selected="true" tabindex="0" type="button" data-tab="general" data-i18n>常规</button>
+					<button class="tab" role="tab" id="tab-procguard" aria-controls="procguardPanel" aria-selected="false" tabindex="-1" type="button" data-tab="procguard" data-i18n>防护</button>
+					<button class="tab" role="tab" id="tab-diagnosis" aria-controls="diagnosisPanel" aria-selected="false" tabindex="-1" type="button" data-tab="diagnosis" data-i18n>诊断</button>
+					<button class="tab" role="tab" id="tab-logs" aria-controls="logsPanel" aria-selected="false" tabindex="-1" type="button" data-tab="logs" data-i18n>日志</button>
+					<button class="tab" role="tab" id="tab-report" aria-controls="reportPanel" aria-selected="false" tabindex="-1" type="button" data-tab="report" data-i18n>报告</button>
 				</div>
-				<label class="switchRow">
-					<span data-i18n-lead>
-						启用隔离防护(procguard)
+			</nav>
+			<section id="generalPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-general" tabindex="0">
+				<section class="panel">
+					<div class="sectionTitle"><h2 data-i18n>界面语言</h2></div>
+					<div class="langSwitch" role="group" aria-label="界面语言" data-i18n-aria-label>
+						<button class="langOption active" type="button" data-lang="zh" lang="zh-CN" aria-label="中文界面" data-i18n-aria-label>中</button>
+						<button class="langOption" type="button" data-lang="en" lang="en" aria-label="英文界面" data-i18n-aria-label>EN</button>
+					</div>
+				</section>
+				<section class="panel">
+					<label class="switchRow">
+						<span data-i18n-lead>
+							syscall 兜底
+							<small class="hint" data-i18n-html>
+								用 kretprobe 拦下 stat / access / readlink / openat 等 7 个 arm64 syscall 入口，绕开 ThinLTO 内联导致的 hook 漏触发。默认勾上 6 个，唯独不挂 <code>faccessat</code>（实测 Holmes "Abnormal Environment 04" 通过 <code>access(F_OK)</code> 时序识别这一个 syscall 的 trampoline 开销）。
+							</small>
+						</span>
+						<input id="enableSyscallHooksInput" type="checkbox" role="switch">
+					</label>
+					<details id="syscallHooksDetails" class="subPanel">
+						<summary data-i18n>选择具体 syscall（高级）</summary>
 						<small class="hint" data-i18n-html>
-							隔离进程会从 zygote 继承 gid 3009(AID_READPROC)，可以遍历全部 <code>/proc/&lt;pid&gt;</code> 并读取任意进程的 mountinfo / cmdline / maps，借此发现 Magisk/KSU 模块挂载(LSPosed Privisolated 披露)。启用后由 procguard.ko 在内核 <code>in_group_p()</code> 处让该 gid 对隔离 UID(90000-99999)失效，<code>/proc/self</code> 不受影响。开关默认关闭，由你决定是否启用。
+							取消勾选某项即不挂对应的 kretprobe。<strong>不推荐勾选 <code>faccessat</code></strong>：会触发 Holmes 04，且大多数应用的 <code>access(path)</code> 在 flag=0 时走的是 <code>faccessat2</code>，<code>faccessat</code> 主要被 timing 探测器使用。
 						</small>
-					</span>
-					<input id="procguardEnableInput" type="checkbox">
-				</label>
-				<p id="procguardStats" class="hint" data-i18n>正在读取状态…</p>
-			</section>
-
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>写入行为伪装</h2>
-				</div>
-				<div class="segmented">
-					<label>
-						<input type="radio" name="writePolicy" value="passthrough">
-						<span data-i18n>跟随原厂</span>
+						<div class="syscallList">
+							<label class="syscallRow"><input type="checkbox" data-syscall="newfstatat"><span>newfstatat<small>stat() / lstat()</small></span></label>
+							<label class="syscallRow"><input type="checkbox" data-syscall="statx"><span>statx<small>statx()</small></span></label>
+							<label class="syscallRow"><input type="checkbox" data-syscall="faccessat"><span>faccessat <em data-i18n>不推荐</em><small data-i18n>access(path), F_OK 时序探测面</small></span></label>
+							<label class="syscallRow"><input type="checkbox" data-syscall="faccessat2"><span>faccessat2<small>access(path, flag≠0)</small></span></label>
+							<label class="syscallRow"><input type="checkbox" data-syscall="readlinkat"><span>readlinkat<small>readlink()</small></span></label>
+							<label class="syscallRow"><input type="checkbox" data-syscall="openat"><span>openat<small data-i18n>open() 主路径</small></span></label>
+							<label class="syscallRow"><input type="checkbox" data-syscall="openat2"><span>openat2<small data-i18n>open() 新接口</small></span></label>
+						</div>
+					</details>
+				</section>
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 data-i18n>开机等待秒数</h2>
+					</div>
+					<label class="switchRow">
+						<span data-i18n>路径出现 + 包名解析的总等待秒数</span>
+						<input id="waitSecondsInput" type="number" min="1" max="600" step="1" inputmode="numeric" value="60">
 					</label>
-					<label>
-						<input type="radio" name="writePolicy" value="eacces">
-						<span data-i18n>伪装不存在</span>
+					<p class="hint" data-i18n>默认 60 秒。开机时 service.sh 会用这一段时间等待隐藏路径出现，并在 deny / allow 模式下等待包名解析为 UID。两个阶段共用同一段预算，到期就跳过加载。包名解析慢的设备可以调大。</p>
+				</section>
+			</section>
+
+			<section id="procguardPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-procguard" tabindex="0">
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 data-i18n>隔离防护</h2>
+					</div>
+					<label class="switchRow">
+						<span data-i18n-lead>
+							启用隔离防护(procguard)
+							<small class="hint" data-i18n-html>
+								隔离进程会从 zygote 继承 gid 3009(AID_READPROC)，可以遍历全部 <code>/proc/&lt;pid&gt;</code> 并读取任意进程的 mountinfo / cmdline / maps，借此发现 Magisk/KSU 模块挂载(LSPosed Privisolated 披露)。启用后由 procguard.ko 在内核 <code>in_group_p()</code> 处让该 gid 对隔离 UID(90000-99999)失效，<code>/proc/self</code> 不受影响。开关默认关闭，由你决定是否启用。
+							</small>
+						</span>
+						<input id="procguardEnableInput" type="checkbox" role="switch">
 					</label>
-					<label>
-						<input type="radio" name="writePolicy" value="enoent">
-						<span data-i18n>旧版行为</span>
-					</label>
-				</div>
-				<p class="hint" data-i18n>检测方对隐藏路径执行写操作（mkdir / Create / rename / 删除）时返回的错误码策略。切换后自动保存并热重载生效。</p>
+					<p id="procguardStats" class="hint" data-i18n>正在读取状态…</p>
+				</section>
+
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 id="writePolicyTitle" data-i18n>写入行为伪装</h2>
+					</div>
+					<div class="segmented" role="group" aria-labelledby="writePolicyTitle">
+						<label>
+							<input type="radio" name="writePolicy" value="passthrough">
+							<span data-i18n>跟随原厂</span>
+						</label>
+						<label>
+							<input type="radio" name="writePolicy" value="eacces">
+							<span data-i18n>伪装不存在</span>
+						</label>
+						<label>
+							<input type="radio" name="writePolicy" value="enoent">
+							<span data-i18n>旧版行为</span>
+						</label>
+					</div>
+					<p class="hint" data-i18n>检测方对隐藏路径执行写操作（mkdir / Create / rename / 删除）时返回的错误码策略。切换后自动保存并热重载生效。</p>
+				</section>
+
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 data-i18n>写入伪装说明</h2>
+					</div>
+					<p class="hint" data-i18n>检测方会用写操作探测隐藏路径，并根据错误码反推路径是否存在：在 FUSE 存储上，mkdir 返回 ENOENT 恰恰是"路径存在但被隐藏"的特征，返回 EACCES 才与"路径真实不存在"一致。</p>
+					<p class="hint" data-i18n-html><strong>跟随原厂（默认）</strong>：写操作不被拦截，由原生文件系统 / FUSE 返回原厂错误码，适合一般场景。</p>
+					<p class="hint" data-i18n-html><strong>伪装不存在</strong>：mkdir / Create / rename 目标返回 EACCES，删除 / rename 源返回 ENOENT，与"路径真实不存在"的错误码画像完全一致，阻断存在性反推。有明确对抗检测需求时选用。</p>
+					<p class="hint" data-i18n-html><strong>旧版行为</strong>：写操作一律返回 ENOENT，可能与原厂错误码不一致，仅为兼容旧配置保留，不建议主动选择。</p>
+					<p class="hint" data-i18n>验证方法：用检测工具对隐藏路径执行 mkdir，期望返回 EACCES 而非 ENOENT。边界：仅对作用范围内的 UID 生效；位于 App 可写目录（如 Documents）下的目标无法完全伪装。</p>
+				</section>
+
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 data-i18n>预期与排查</h2>
+					</div>
+					<p class="hint" data-i18n-html>启用后，隔离进程将失去遍历 <code>/proc</code> 的能力（gid 3009 在内核层被摘除）。用 Privisolated 之类的检测 demo 验证时：</p>
+					<p class="hint" data-i18n-html><strong>OK: Not found / INFO: vulnerability fixed</strong>——第一层泄漏已封堵，防护生效。</p>
+					<p class="hint" data-i18n-html><strong>仍然 WARN，且内容是本机挂载路径</strong>——这超出了本模块的范围：说明隔离进程<em>自己的</em> mountinfo 里就能看到模块挂载（第二层问题）。procguard 只负责摘除 gid 3009，不改变挂载可见性；此时应排查其他涉及挂载的模块采用了什么挂载方式，以及 root 方案对隔离进程挂载命名空间的隐藏是否到位。</p>
+				</section>
 			</section>
 
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>写入伪装说明</h2>
-				</div>
-				<p class="hint" data-i18n>检测方会用写操作探测隐藏路径，并根据错误码反推路径是否存在：在 FUSE 存储上，mkdir 返回 ENOENT 恰恰是"路径存在但被隐藏"的特征，返回 EACCES 才与"路径真实不存在"一致。</p>
-				<p class="hint" data-i18n-html><strong>跟随原厂（默认）</strong>：写操作不被拦截，由原生文件系统 / FUSE 返回原厂错误码，适合一般场景。</p>
-				<p class="hint" data-i18n-html><strong>伪装不存在</strong>：mkdir / Create / rename 目标返回 EACCES，删除 / rename 源返回 ENOENT，与"路径真实不存在"的错误码画像完全一致，阻断存在性反推。有明确对抗检测需求时选用。</p>
-				<p class="hint" data-i18n-html><strong>旧版行为</strong>：写操作一律返回 ENOENT，可能与原厂错误码不一致，仅为兼容旧配置保留，不建议主动选择。</p>
-				<p class="hint" data-i18n>验证方法：用检测工具对隐藏路径执行 mkdir，期望返回 EACCES 而非 ENOENT。边界：仅对作用范围内的 UID 生效；位于 App 可写目录（如 Documents）下的目标无法完全伪装。</p>
+			<section id="diagnosisPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-diagnosis" tabindex="0">
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 data-i18n>结论</h2>
+						<button id="runDiagnosticBtn" class="primary" type="button" data-i18n>生成诊断</button>
+					</div>
+					<!-- The verdict box is hidden until a diagnostic run has -->
+					<!-- populated lastSnapshot.verdict; see renderVerdictPanel(). -->
+					<div id="verdictBox" class="verdictBox" hidden></div>
+					<ul id="healthList" class="healthList"></ul>
+				</section>
+
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 data-i18n>快速操作</h2>
+					</div>
+					<div class="buttonGrid">
+						<button id="validateConfigBtn" type="button" data-i18n>校验配置</button>
+						<button id="copyReportBtn" type="button" data-i18n>复制诊断报告</button>
+						<button id="historyBtn" type="button" data-i18n>历史诊断</button>
+						<button id="resetDefaultsBtn" type="button" data-i18n>恢复默认配置</button>
+					</div>
+				</section>
 			</section>
 
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>预期与排查</h2>
-				</div>
-				<p class="hint" data-i18n-html>启用后，隔离进程将失去遍历 <code>/proc</code> 的能力（gid 3009 在内核层被摘除）。用 Privisolated 之类的检测 demo 验证时：</p>
-				<p class="hint" data-i18n-html><strong>OK: Not found / INFO: vulnerability fixed</strong>——第一层泄漏已封堵，防护生效。</p>
-				<p class="hint" data-i18n-html><strong>仍然 WARN，且内容是本机挂载路径</strong>——这超出了本模块的范围：说明隔离进程<em>自己的</em> mountinfo 里就能看到模块挂载（第二层问题）。procguard 只负责摘除 gid 3009，不改变挂载可见性；此时应排查其他涉及挂载的模块采用了什么挂载方式，以及 root 方案对隔离进程挂载命名空间的隐藏是否到位。</p>
+			<section id="logsPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-logs" tabindex="0">
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 data-i18n>日志分页</h2>
+						<button id="refreshLogsBtn" class="tonal" type="button" data-i18n>刷新日志</button>
+					</div>
+					<div class="logTabs" role="group" aria-label="日志类别" data-i18n-aria-label>
+						<button class="logTab active" type="button" aria-pressed="true" data-log="status" data-i18n>状态</button>
+						<button class="logTab" type="button" aria-pressed="false" data-log="config" data-i18n>配置</button>
+						<button class="logTab" type="button" aria-pressed="false" data-log="kernel" data-i18n>内核</button>
+						<button class="logTab" type="button" aria-pressed="false" data-log="script" data-i18n>脚本</button>
+					</div>
+					<textarea id="logOutput" class="monoBox" rows="16" readonly aria-label="日志内容" data-i18n-aria-label></textarea>
+					<div class="pager">
+						<button id="prevLogBtn" type="button" data-i18n>上一页</button>
+						<span id="logPageInfo">0 / 0</span>
+						<button id="nextLogBtn" type="button" data-i18n>下一页</button>
+					</div>
+				</section>
 			</section>
-		</section>
 
-		<section id="diagnosisPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-diagnosis" tabindex="0">
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>结论</h2>
-					<button id="runDiagnosticBtn" type="button" data-i18n>生成诊断</button>
-				</div>
-				<!-- The verdict box is hidden until a diagnostic run has -->
-				<!-- populated lastSnapshot.verdict; see renderVerdictPanel(). -->
-				<div id="verdictBox" class="verdictBox" hidden></div>
-				<ul id="healthList" class="healthList"></ul>
-			</section>
-
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>快速操作</h2>
-				</div>
-				<div class="buttonGrid">
-					<button id="validateConfigBtn" type="button" data-i18n>校验配置</button>
-					<button id="copyReportBtn" type="button" data-i18n>复制诊断报告</button>
-					<button id="historyBtn" type="button" data-i18n>历史诊断</button>
-					<button id="resetDefaultsBtn" type="button" data-i18n>恢复默认配置</button>
-				</div>
-			</section>
-		</section>
-
-		<section id="logsPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-logs" tabindex="0">
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>日志分页</h2>
-					<button id="refreshLogsBtn" type="button" data-i18n>刷新日志</button>
-				</div>
-				<div class="logTabs" role="group" aria-label="日志类别" data-i18n-aria-label>
-					<button class="logTab active" type="button" aria-pressed="true" data-log="status" data-i18n>状态</button>
-					<button class="logTab" type="button" aria-pressed="false" data-log="config" data-i18n>配置</button>
-					<button class="logTab" type="button" aria-pressed="false" data-log="kernel" data-i18n>内核</button>
-					<button class="logTab" type="button" aria-pressed="false" data-log="script" data-i18n>脚本</button>
-				</div>
-				<textarea id="logOutput" class="monoBox" rows="16" readonly aria-label="日志内容" data-i18n-aria-label></textarea>
-				<div class="pager">
-					<button id="prevLogBtn" type="button" data-i18n>上一页</button>
-					<span id="logPageInfo">0 / 0</span>
-					<button id="nextLogBtn" type="button" data-i18n>下一页</button>
-				</div>
-			</section>
-		</section>
-
-		<section id="reportPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-report" tabindex="0">
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 data-i18n>诊断报告</h2>
-					<button id="copyReportBtn2" type="button" data-i18n>复制</button>
-				</div>
-				<textarea id="reportOutput" class="monoBox" rows="20" readonly placeholder="点击“生成诊断”后这里会出现可复制报告" data-i18n-placeholder></textarea>
+			<section id="reportPanel" class="tabPanel" role="tabpanel" aria-labelledby="tab-report" tabindex="0">
+				<section class="panel">
+					<div class="sectionTitle">
+						<h2 id="reportTitle" data-i18n>诊断报告</h2>
+						<button id="copyReportBtn2" class="tonal" type="button" data-i18n>复制</button>
+					</div>
+					<textarea id="reportOutput" class="monoBox" aria-labelledby="reportTitle" rows="20" readonly placeholder="点击“生成诊断”后这里会出现可复制报告" data-i18n-placeholder></textarea>
+				</section>
 			</section>
 		</section>
 	</main>
 
-	<footer class="actions">
-		<button id="saveBtn" type="button" data-i18n>保存配置</button>
-		<button id="pauseBtn" type="button" data-i18n>暂停隐藏</button>
-		<button id="reloadBtn" class="primary" type="button" data-i18n>保存并热重载</button>
+	<footer class="actions liquidGlass liquidSurface" hidden>
+		<div class="chromeInner actionsInner">
+			<button id="saveBtn" type="button" data-i18n>保存配置</button>
+			<button id="pauseBtn" class="textButton" type="button" data-i18n>暂停隐藏</button>
+			<button id="reloadBtn" class="primary" type="button" data-i18n>保存并热重载</button>
+		</div>
 	</footer>
+
+	<nav id="mainDock" class="liquidDock liquidGlass" aria-label="主导航" data-i18n-aria-label>
+		<button id="dock-home" class="liquidDockItem" type="button" data-dock-page="home" aria-controls="homePanel" aria-current="page">
+			<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 11 12 4l9 7v8a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+			<span data-i18n>主页</span>
+		</button>
+		<button id="dock-apps" class="liquidDockItem" type="button" data-dock-page="apps" aria-controls="appsPanel">
+			<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
+			<span data-i18n>应用</span>
+		</button>
+		<button id="dock-settings" class="liquidDockItem" type="button" data-dock-page="settings" aria-controls="settingsShell">
+			<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h6m4 0h8M3 12h11m4 0h3M3 18h2m4 0h12M9 4v4m5 2v4m-9 2v4"/></svg>
+			<span data-i18n>设置</span>
+		</button>
+	</nav>
 
 	<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
@@ -342,7 +471,7 @@
 			<div class="modalBody">
 				<p class="hint" data-i18n>每次「生成诊断」后会自动保存最近 5 份。点击下方某一份可在右侧显示内容。今天突然不工作？对比之前的快照能快速定位是哪一项变了。</p>
 				<ul id="historyList" class="healthList"></ul>
-				<textarea id="historyView" class="monoBox" rows="14" readonly placeholder="选择一项查看内容" data-i18n-placeholder></textarea>
+				<textarea id="historyView" class="monoBox" aria-labelledby="historyTitle" rows="14" readonly placeholder="选择一项查看内容" data-i18n-placeholder></textarea>
 				<div class="buttonGrid">
 					<button id="historyCopyBtn" type="button" data-i18n>复制选中</button>
 				</div>
@@ -403,9 +532,12 @@
 				? " @ " + e.filename.replace(/^.*\//, "") + ":" + e.lineno
 				: "";
 			s.textContent = "脚本错误：" + e.message + loc;
-			s.style.color = "#c01c28";
+			s.classList.add("statusError");
 		}, true);
 	</script>
+	<script src="./liquid-glass.js"></script>
+	<script src="./profile-drafts.js"></script>
+	<script src="./app-directory.js"></script>
 	<script src="./app.js" charset="utf-8"></script>
 </body>
 </html>

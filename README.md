@@ -313,6 +313,25 @@ edits these files for you, but they can also be inspected manually:
 - `/data/adb/pathmask/procguard.conf`: isolation-protection switch. Default
   `0`. `1` loads the companion `procguard.ko` at boot; the WebUI Protection
   tab writes this file and applies the change immediately.
+- `/data/adb/pathmask/app_profiles.conf`: per-app rules. The WebUI Apps page
+  merges your confirmed changes without overwriting other apps. It saves the
+  merged configuration only after a kernel acknowledgment. Each app block contains:
+
+  ```text
+  app <userId> <packageName> <enabled 0|1> <filterDirectory 0|1>
+  path <absolute path>
+  ```
+
+  Each `path` line belongs to the `app` line above it. Only enabled apps with
+  at least one path become a rule. These rules are independent of
+  `target_path.conf` and `scope_mode.conf`: they never inherit the legacy
+  shared paths and never change them. A scoped legacy configuration without
+  resolved UIDs is not loaded alongside the per-app rules. Paths must be
+  resolvable, at most 255 UTF-8 bytes long, and must not contain commas or
+  semicolons. Rules are validated and committed as a whole, not partially.
+  The exact Android user and package must resolve to a uniquely owned, ordinary
+  app UID. Shared, privileged/system, isolated and app-zygote identities are
+  not accepted for per-app activation. A rejected update is reported explicitly.
 
 The latest Scene auto-discovery result is recorded in
 `/data/adb/pathmask/scene_debugfs_state`, with resolved paths written one per

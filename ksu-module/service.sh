@@ -30,6 +30,7 @@ MOD_SYSCALL_HOOKS_CONFIG="$MODDIR/syscall_hooks.conf"
 MOD_WRITE_OP_POLICY_CONFIG="$MODDIR/write_op_policy.conf"
 MOD_AUTO_SCENE_DEBUGFS_CONFIG="$MODDIR/auto_scene_debugfs.conf"
 MOD_PROC_GUARD_CONFIG="$MODDIR/procguard.conf"
+MOD_APP_PROFILES_CONFIG="$MODDIR/app_profiles.conf"
 
 CONFIG_PATH="$PERSIST_DIR/target_path.conf"
 HIDE_DIRENTS_CONFIG="$PERSIST_DIR/hide_dirents.conf"
@@ -45,6 +46,7 @@ SYSCALL_HOOKS_CONFIG="$PERSIST_DIR/syscall_hooks.conf"
 WRITE_OP_POLICY_CONFIG="$PERSIST_DIR/write_op_policy.conf"
 AUTO_SCENE_DEBUGFS_CONFIG="$PERSIST_DIR/auto_scene_debugfs.conf"
 PROC_GUARD_CONFIG="$PERSIST_DIR/procguard.conf"
+APP_PROFILES_CONFIG="$PERSIST_DIR/app_profiles.conf"
 SCENE_DEBUGFS_PATHS_PATH="$PERSIST_DIR/scene_debugfs_paths"
 SCENE_DEBUGFS_STATE_PATH="$PERSIST_DIR/scene_debugfs_state"
 SCENE_WATCH_STOP_PATH="$PERSIST_DIR/scene_debugfs_watch.stop"
@@ -320,6 +322,7 @@ init_persistent_config() {
 		WRITE_OP_POLICY_CONFIG="$MOD_WRITE_OP_POLICY_CONFIG"
 		AUTO_SCENE_DEBUGFS_CONFIG="$MOD_AUTO_SCENE_DEBUGFS_CONFIG"
 		PROC_GUARD_CONFIG="$MOD_PROC_GUARD_CONFIG"
+		APP_PROFILES_CONFIG="$MOD_APP_PROFILES_CONFIG"
 		return
 	fi
 
@@ -372,6 +375,11 @@ init_persistent_config() {
 	seed_config_file "$WRITE_OP_POLICY_CONFIG" "$MOD_WRITE_OP_POLICY_CONFIG" "passthrough"
 	seed_config_file "$AUTO_SCENE_DEBUGFS_CONFIG" "$MOD_AUTO_SCENE_DEBUGFS_CONFIG" "0"
 	seed_config_file "$PROC_GUARD_CONFIG" "$MOD_PROC_GUARD_CONFIG" "0"
+	# Don't change the config's existence while an explicit apply is staging
+	# its first ruleset. The WebUI owns the final atomic rename in that case.
+	if [ -z "${PATHMASK_PROFILE_REQUEST:-}" ]; then
+		seed_config_file "$APP_PROFILES_CONFIG" "$MOD_APP_PROFILES_CONFIG" ""
+	fi
 
 	# Existing installs from v2.2.8 - v2.3.1 shipped enable_syscall_hooks=0
 	# as a defensive default (Holmes 04 mitigation pre-bisect). Now that the
@@ -753,11 +761,13 @@ package_to_uid_from_data_dir() {
 
 package_to_uid_from_pm() {
 	PACKAGE_NAME="$1"
+	# stdin is /dev/null so a caller's config-file descriptor cannot reach
+	# the package service; with one inherited these calls fail outright.
 	PACKAGE_LINES="$(
-		cmd package list packages --user 0 -U "$PACKAGE_NAME" 2>/dev/null || true
-		pm list packages --user 0 -U "$PACKAGE_NAME" 2>/dev/null || true
-		cmd package list packages -U "$PACKAGE_NAME" 2>/dev/null || true
-		pm list packages -U "$PACKAGE_NAME" 2>/dev/null || true
+		cmd package list packages --user 0 -U "$PACKAGE_NAME" 2>/dev/null < /dev/null || true
+		pm list packages --user 0 -U "$PACKAGE_NAME" 2>/dev/null < /dev/null || true
+		cmd package list packages -U "$PACKAGE_NAME" 2>/dev/null < /dev/null || true
+		pm list packages -U "$PACKAGE_NAME" 2>/dev/null < /dev/null || true
 	)"
 
 	printf '%s\n' "$PACKAGE_LINES" |
@@ -797,6 +807,61 @@ package_to_uid() {
 	fi
 
 	package_to_uid_from_data_dir "$1" | head -n 1
+}
+
+# The compiler works in a private directory; it never modifies the source.
+. "$MODDIR/app-profiles.sh" || exit 1
+
+PROFILE_WORK=""
+PROFILE_REQUEST=${PATHMASK_PROFILE_REQUEST:-}
+PROFILE_MODE=0
+PROFILE_FAILURE=""
+APP_PROFILE_COUNT=0
+
+profile_cleanup() {
+	[ -n "$PROFILE_WORK" ] || return 0
+	rm -f "$PROFILE_WORK/input" "$PROFILE_WORK/requests" "$PROFILE_WORK/rules" "$PROFILE_WORK"/user-*
+	rmdir "$PROFILE_WORK" 2>/dev/null || true
+}
+
+profile_compile() {
+	APP_PROFILE_ERROR="cannot create a private profile workspace"
+	mkdir -p "$PERSIST_DIR" || return 1
+	PROFILE_WORK=$(umask 077; mktemp -d "$PERSIST_DIR/.profile-build.XXXXXX") || return 1
+	trap profile_cleanup EXIT
+	pm_compile_app_profiles "$1" "$PROFILE_WORK" "$2"
+}
+
+profile_fail() {
+	log_e "app profiles: $PROFILE_FAILURE"
+	write_boot_state "failed-app-profiles" "$PROFILE_FAILURE" ""
+	if [ -n "$PROFILE_REQUEST" ]; then
+		printf 'app profiles: %s\n' "$PROFILE_FAILURE" >&2
+	fi
+}
+
+profile_ack() {
+	if [ -n "$PROFILE_REQUEST" ]; then
+		printf 'PATHMASK_APP_PROFILES_OK %s %s\n' "$PROFILE_REQUEST" "$APP_PROFILE_COUNT"
+	fi
+}
+
+skip_without_targets() {
+	if [ -n "$PROFILE_FAILURE" ]; then
+		profile_fail
+		exit 1
+	fi
+	write_boot_state "$1" "$2" ""
+	if [ -n "$PROFILE_REQUEST" ]; then
+		# A reload may intentionally clear the last app profile. It is only
+		# confirmed as empty if there is no previous table still running.
+		if [ "$APP_PROFILE_COUNT" -ne 0 ] || grep -q '^pathmask ' /proc/modules; then
+			log_e "could not confirm an empty applied app profile table"
+			exit 1
+		fi
+		profile_ack
+	fi
+	exit 0
 }
 
 read_scope_uid_config() {
@@ -1180,6 +1245,14 @@ wait_for_scope_packages() {
 	read_active_package_config 0
 }
 
+if [ "${1:-}" = "--check-app-profiles" ]; then
+	if [ "$#" -eq 2 ] && profile_compile "$2" 1; then
+		exit 0
+	fi
+	printf 'app profiles: %s\n' "${APP_PROFILE_ERROR:-invalid arguments}" >&2
+	exit 1
+fi
+
 init_persistent_config
 
 # Pause writes a stop sentinel before unloading so the background watcher
@@ -1353,12 +1426,6 @@ elif [ -z "$SYSCALL_HOOKS" ]; then
 	SYSCALL_HOOKS="all"
 fi
 
-if [ -z "$TARGET_RAW_LINES" ] && [ "$AUTO_SCENE_DEBUGFS" = "0" ]; then
-	log_e "empty target path list"
-	write_boot_state "skipped-empty-targets" "no path configured" ""
-	exit 1
-fi
-
 if [ ! -f "$KO_PATH" ]; then
 	log_e "missing module: $KO_PATH"
 	record_load_failure "missing module: $KO_PATH"
@@ -1377,26 +1444,49 @@ if [ "$INITIAL_DELAY_SECONDS" -gt 0 ]; then
 	sleep "$INITIAL_DELAY_SECONDS"
 fi
 
+PROFILE_SOURCE="$APP_PROFILES_CONFIG"
+if [ -n "$PROFILE_REQUEST" ]; then
+	case "$PROFILE_REQUEST" in
+		0*|*[!0-9]*) exit 2 ;;
+	esac
+	[ "${#PROFILE_REQUEST}" -le 19 ] || exit 2
+	case "${PATHMASK_APP_PROFILES_STAGE:-}" in
+		"$PERSIST_DIR"/.profile-write.*/candidate) PROFILE_SOURCE="$PATHMASK_APP_PROFILES_STAGE" ;;
+		*) exit 2 ;;
+	esac
+fi
+if ! profile_compile "$PROFILE_SOURCE" 0; then
+	PROFILE_FAILURE="$APP_PROFILE_ERROR"
+	profile_fail
+	if [ -n "$PROFILE_REQUEST" ]; then
+		exit 1
+	fi
+elif [ "$APP_PROFILE_COUNT" -gt 0 ]; then
+	PROFILE_MODE=1
+fi
+
+if [ -z "$TARGET_RAW_LINES" ] && [ "$AUTO_SCENE_DEBUGFS" = "0" ] && [ "$PROFILE_MODE" = "0" ]; then
+	skip_without_targets "skipped-empty-targets" "no path configured"
+fi
+
 WAIT_DEADLINE=$(( $(date +%s 2>/dev/null || echo 0) + WAIT_SECONDS ))
 
 if ! wait_for_targets "$WAIT_DEADLINE"; then
-	log_i "no configured targets exist, skip loading"
-	write_boot_state "skipped-targets-missing" "$TARGET_PATHS" ""
-	start_scene_debugfs_watcher "0"
-	exit 0
+	if [ "$PROFILE_MODE" = "0" ]; then
+		log_i "no configured targets exist, skip loading"
+		start_scene_debugfs_watcher "0"
+		skip_without_targets "skipped-targets-missing" "$TARGET_PATHS"
+	fi
+	log_i "no legacy targets; continuing for per-app rules only"
 fi
 
 if [ "$SCOPE_MODE" = "deny" ] || [ "$SCOPE_MODE" = "allow" ]; then
 	wait_for_scope_packages "$WAIT_DEADLINE"
-	if [ -z "$DENY_UIDS" ]; then
-		if [ "$SCOPE_MODE" = "allow" ]; then
-			log_i "scope_mode=allow but no allow UIDs resolved, skip loading"
-			write_boot_state "skipped-no-uids" "allow mode without resolved UIDs" ""
-		else
-			log_i "scope_mode=deny but no deny UIDs resolved, skip loading"
-			write_boot_state "skipped-no-uids" "deny mode without resolved UIDs" ""
+	if ! pm_legacy_scope_resolved "$SCOPE_MODE" "$DENY_UIDS"; then
+		log_i "legacy $SCOPE_MODE has no resolved UIDs; legacy paths disabled"
+		if [ "$PROFILE_MODE" = "0" ]; then
+			skip_without_targets "skipped-no-uids" "$SCOPE_MODE mode without resolved UIDs"
 		fi
-		exit 0
 	fi
 else
 	read_deny_uid_config
@@ -1407,12 +1497,14 @@ if grep -q '^pathmask ' /proc/modules 2>/dev/null; then
 	reset_load_failure_guard
 	log_i "pathmask is already loaded"
 	write_boot_state "already-loaded" "" ""
+	[ -z "$PROFILE_REQUEST" ] || exit 1
 	exit 0
 fi
 
 if grep -q '^nohello ' /proc/modules 2>/dev/null; then
 	log_i "legacy nohello module is loaded; unload it before loading pathmask"
 	write_boot_state "skipped-legacy-loaded" "legacy nohello in /proc/modules" ""
+	[ -z "$PROFILE_REQUEST" ] || exit 1
 	exit 0
 fi
 
@@ -1421,11 +1513,14 @@ fi
 # creates (or replaces) its randomized debugfs mount between target waiting
 # and module loading.
 rebuild_target_paths
-if ! any_target_exists; then
-	log_i "no targets exist after final pre-insmod scan, skip loading"
-	write_boot_state "skipped-targets-missing" "$TARGET_PATHS" ""
-	start_scene_debugfs_watcher "0"
-	exit 0
+# Keep this gate after the final rebuild so automatic paths cannot restore
+# an unresolved legacy scope when a per-app-only installation can load.
+if ! pm_legacy_scope_resolved "$SCOPE_MODE" "$DENY_UIDS" || ! any_target_exists; then
+	TARGET_PATHS=""
+	if [ "$PROFILE_MODE" = "0" ]; then
+		start_scene_debugfs_watcher "0"
+		skip_without_targets "skipped-targets-missing" "no usable legacy paths"
+	fi
 fi
 if [ "$AUTO_SCENE_DEBUGFS" = "1" ] && [ "$SCENE_DEBUGFS_COUNT" -gt 0 ]; then
 	write_scene_debugfs_state "found" "0" "discovered $SCENE_DEBUGFS_COUNT matching mount(s) before insmod"
@@ -1446,10 +1541,21 @@ if [ -f "$PROC_GUARD_KO_PATH" ] && [ "$(head -n 1 "$PROC_GUARD_CONFIG" 2>/dev/nu
 	fi
 fi
 
-if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS" write_op_policy="$WRITE_OP_POLICY"; then
+if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS" write_op_policy="$WRITE_OP_POLICY" profile_mode="$PROFILE_MODE"; then
 	reset_load_failure_guard
-	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS syscall_hooks=$SYSCALL_HOOKS write_op_policy=$WRITE_OP_POLICY"
+	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS syscall_hooks=$SYSCALL_HOOKS write_op_policy=$WRITE_OP_POLICY profile_mode=$PROFILE_MODE"
+	if [ "$PROFILE_MODE" = "1" ] || [ -n "$PROFILE_REQUEST" ]; then
+		PROFILE_GENERATION="${PROFILE_REQUEST:-$(date +%s)$$}"
+		if ! pm_apply_app_profiles "$PROFILE_GENERATION"; then
+			PROFILE_FAILURE="$APP_PROFILE_ERROR"
+		fi
+	fi
+	if [ -n "$PROFILE_FAILURE" ]; then
+		profile_fail
+		exit 1
+	fi
 	write_boot_state "loaded" "$TARGET_PATHS" ""
+	profile_ack
 	if [ "$AUTO_SCENE_DEBUGFS" = "1" ]; then
 		write_scene_debugfs_state "$SCENE_DEBUGFS_STATUS" "1" "discovered $SCENE_DEBUGFS_COUNT matching mount(s)"
 		start_scene_debugfs_watcher "1"

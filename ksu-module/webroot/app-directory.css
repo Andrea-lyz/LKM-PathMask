@@ -1,0 +1,93 @@
+.directoryBar, .directoryIdentity, .directoryActions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.directoryBar { justify-content: space-between; flex-wrap: wrap; }
+.directoryActions { justify-content: flex-end; flex-wrap: wrap; }
+.directoryIdentity { align-items: flex-start; }
+.directoryPanel { display: grid; gap: var(--space-2); min-width: 0; }
+.directoryPanel .hint, .directorySwitch { margin: 0; }
+.directoryNotice { margin: 0; }
+.directoryPanel [hidden] { display: none; }
+.directoryInfo { display: grid; gap: var(--space-1); min-width: 0; text-align: start; }
+.directoryInfo .hint { margin: 0; }
+.directoryInfo strong { font: var(--md-sys-typescale-label-large); }
+
+.directoryList, .directoryPathList {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+	min-width: 0;
+}
+
+.directoryList {
+	border: 1px solid var(--md-sys-color-outline-variant);
+	border-radius: var(--md-sys-shape-corner-medium);
+	background: var(--md-sys-color-surface-container-low);
+}
+
+.directoryList li + li { border-top: 1px solid var(--md-sys-color-outline-variant); }
+
+button.directoryRow {
+	display: grid;
+	width: 100%;
+	min-height: 4.5rem;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	gap: var(--space-3);
+	align-items: center;
+	padding: var(--space-3);
+	border: 0;
+	border-radius: var(--md-sys-shape-corner-medium);
+	color: var(--md-sys-color-on-surface);
+}
+
+.directoryRow:focus-visible { outline-offset: -3px; }
+.directoryMeta { display: grid; justify-items: end; gap: var(--space-1); max-width: 7rem; }
+.directoryBadge {
+	width: fit-content;
+	padding: var(--space-1) var(--space-2);
+	border-radius: var(--md-sys-shape-corner-full);
+	background: var(--md-sys-color-secondary-container);
+	color: var(--md-sys-color-on-secondary-container);
+	font: var(--md-sys-typescale-label-medium);
+	text-align: center;
+}
+
+.directoryIcon {
+	position: relative;
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 2.5rem;
+	height: 2.5rem;
+	border-radius: var(--md-sys-shape-corner-medium);
+	background: var(--md-sys-color-primary-container);
+	color: var(--md-sys-color-on-primary-container);
+}
+.directoryIconLarge { width: 3.5rem; height: 3.5rem; }
+.directoryIcon svg { width: 1.25rem; height: 1.25rem; }
+.directoryIcon img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; opacity: 0; }
+.directoryIcon img.loaded { opacity: 1; }
+
+.directoryPathList { display: grid; gap: var(--space-2); }
+.directoryPathList:empty { display: none; }
+.directoryPathList li {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	padding: 0 var(--space-2) 0 var(--space-3);
+	border-radius: var(--md-sys-shape-corner-small);
+	background: var(--md-sys-color-surface-container-low);
+}
+.directoryPathList code { overflow-wrap: anywhere; font: .875rem / 1.4 var(--font-mono); }
+.directoryPathEntry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); }
+.directoryError { color: var(--md-sys-color-error); }
+#draftPathInput { font: .875rem / 1.4 var(--font-mono); }
+#draftPathInput[aria-invalid="true"] { border-color: var(--md-sys-color-error); }
+#draftPathError[hidden] { display: none; }
+.directoryCompatibility .directoryPanel { margin-top: var(--space-2); }
+.directoryCompatibility .directoryPanel > button { justify-self: start; }
+.directoryMultiline { white-space: pre-wrap; }
+#appDraftBackupInput[aria-invalid="true"] { border-color: var(--md-sys-color-error); }
