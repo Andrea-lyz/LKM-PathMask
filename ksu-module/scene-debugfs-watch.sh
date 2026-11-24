@@ -157,18 +157,31 @@ reload_lock_busy() {
 }
 
 take_reload_lock() {
-	if ! mkdir "$RELOAD_LOCK_DIR" 2>/dev/null; then
+	# Wait out a transient holder (typically a WebUI transaction) for a few
+	# seconds instead of failing at once. A dead owner is reclaimed
+	# immediately, and a live owner that never releases still fails -- never
+	# loops forever.
+	WAITED=0
+	while :; do
+		if mkdir "$RELOAD_LOCK_DIR" 2>/dev/null; then
+			RELOAD_LOCK_HELD=1
+			printf '%s\n' "$$" > "$RELOAD_LOCK_DIR/pid" || { release_reload_lock; return 1; }
+			return 0
+		fi
 		[ -d "$RELOAD_LOCK_DIR" ] && [ ! -L "$RELOAD_LOCK_DIR" ] || return 1
-		reload_lock_owner_alive && return 1
-		# Give a new owner time to write its pid after mkdir.
+		if reload_lock_owner_alive; then
+			[ "$WAITED" -lt 5 ] || return 1
+			WAITED=$((WAITED + 1))
+			sleep 1
+			continue
+		fi
+		# No live owner: give a fresh owner a moment to record its pid
+		# after mkdir, then reclaim the lock if it is still ownerless.
 		sleep 1
-		reload_lock_owner_alive && return 1
+		reload_lock_owner_alive && continue
 		rm -f "$RELOAD_LOCK_DIR/pid" 2>/dev/null
 		rmdir "$RELOAD_LOCK_DIR" 2>/dev/null || return 1
-		mkdir "$RELOAD_LOCK_DIR" 2>/dev/null || return 1
-	fi
-	RELOAD_LOCK_HELD=1
-	printf '%s\n' "$$" > "$RELOAD_LOCK_DIR/pid" || { release_reload_lock; return 1; }
+	done
 }
 
 release_reload_lock() {
