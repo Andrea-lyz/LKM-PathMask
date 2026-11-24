@@ -216,6 +216,22 @@ const EN_TEXT = {
 	"未能确认模式切换；保留已保存模式。": "Mode change could not be confirmed. The saved mode was not changed.",
 	"模式切换失败，上一模式的运行状态也未确认。": "Mode change failed, and the prior runtime mode could not be confirmed.",
 	"新版配置资源不可用，当前模式未更改。": "The new configuration resources are unavailable. The current mode was not changed.",
+	"无法迁移旧版规则，当前模式未更改：{0}": "Could not migrate the previous rules. The current mode was not changed: {0}",
+	"已将旧版黑名单的 {0} 条共享路径迁移到 {1} 个应用。": "Migrated {0} shared path(s) of the old blacklist to {1} app(s).",
+	"旧版黑名单没有可迁移的路径，未创建应用配置。": "The old blacklist has no paths to migrate; no app settings were created.",
+	"{0} 个已停用的应用配置保持停用。": "{0} disabled app setting(s) stay disabled.",
+	"已将 {0} 条逐应用路径加入共享路径。": "Added {0} per-app path(s) to the shared paths.",
+	"逐应用配置无效，未合并其路径。": "Per-app settings are invalid; their paths were not merged.",
+	"{0} 条动态或无效路径": "{0} dynamic or invalid path(s)",
+	"{0} 条当前不存在的路径": "{0} path(s) that do not exist now",
+	"{0} 个未安装或无法解析的应用": "{0} app(s) not installed or not resolvable",
+	"{0} 个无法解析的 UID": "{0} unresolved UID(s)",
+	"已跳过：{0}。": "Skipped: {0}.",
+	"、": ", ",
+	"未迁移的路径：{0}": "Paths not migrated: {0}",
+	"不存在的路径：{0}": "Missing paths: {0}",
+	"未迁移的应用：{0}": "Apps not migrated: {0}",
+	"未解析的 UID：{0}": "Unresolved UIDs: {0}",
 	"请先在主页应用所选模式。": "Apply the selected mode on Home first.",
 	"已保存配置；切换模式请返回主页。": "Configuration saved. Return to Home to change the active mode.",
 	"无法读取已安装应用，可点击加载重试。": "Could not read installed apps. Use Load to retry.",
@@ -798,7 +814,10 @@ const EN_TEXT = {
 		"(No history yet. Every Run diagnostics saves one snapshot.)",
 	"正在启用隔离防护...": "Enabling the isolated-process guard...",
 	"正在停用隔离防护...": "Disabling the isolated-process guard...",
-	"保存并热重载或重启后生效": "Takes effect after Save & reload or a reboot",
+	"正在启用 Scene 自动识别...": "Enabling Scene auto-detection...",
+	"正在停用 Scene 自动识别...": "Disabling Scene auto-detection...",
+	"正在应用 Scene 自动识别...": "Applying Scene auto-detection...",
+	"已关闭 Scene 自动识别": "Scene auto-detection turned off",
 
 	// Inline fallbacks that live inside larger templates.
 	"很久": "a long while",
@@ -4069,10 +4088,11 @@ function readConfigurationEdits() {
 	}
 	const scope = ruleEditorScope();
 	syncActiveUidText();
+	// auto_scene_debugfs.conf is owned by the Protection settings page
+	// (applyAutoSceneDebugfs), not the config-page save.
 	const entries = [
 		[files.targets, collectPaths()],
 		[files.hideDirents, [$("#hideDirentsInput").checked ? "1" : "0"]],
-		[files.autoSceneDebugfs, [$("#autoSceneDebugfsInput").checked ? "1" : "0"]],
 	];
 	if (scope === "allow") {
 		entries.push([files.allowPackages, sortedPackageList("allow")],
@@ -4100,18 +4120,32 @@ reload_lock_owner_alive() {
 	kill -0 "$owner" 2>/dev/null
 }
 take_reload_lock() {
-	if ! mkdir "$lock" 2>/dev/null; then
+	# A transient holder (typically the Scene watcher) is waited out for a
+	# few seconds instead of failing instantly, so a quick background reload
+	# does not surface as a generic error. A dead owner is still reclaimed at
+	# once, and a live owner that never releases still fails -- never loops
+	# forever.
+	waited=0
+	while :; do
+		if mkdir "$lock" 2>/dev/null; then
+			reload_lock_held=1
+			printf '%s\\n' "$$" > "$lock/pid" || { drop_reload_lock; return 1; }
+			return 0
+		fi
 		[ -d "$lock" ] && [ ! -L "$lock" ] || return 1
-		reload_lock_owner_alive && return 1
-		# Give a new owner time to write its pid after mkdir.
+		if reload_lock_owner_alive; then
+			[ "$waited" -lt 5 ] || return 1
+			waited=$((waited + 1))
+			sleep 1
+			continue
+		fi
+		# No live owner: give a fresh owner a moment to record its pid
+		# after mkdir, then reclaim the lock if it is still ownerless.
 		sleep 1
-		reload_lock_owner_alive && return 1
+		reload_lock_owner_alive && continue
 		rm -f "$lock/pid" 2>/dev/null
 		rmdir "$lock" 2>/dev/null || return 1
-		mkdir "$lock" 2>/dev/null || return 1
-	fi
-	reload_lock_held=1
-	printf '%s\\n' "$$" > "$lock/pid" || { drop_reload_lock; return 1; }
+	done
 }
 drop_reload_lock() {
 	[ "$reload_lock_held" = 1 ] || return 0
@@ -4165,6 +4199,10 @@ async function applyRuleMode() {
 	const mode = currentScope();
 	if (mode === "deny" && !appDirectory) throw new Error(t("新版配置资源不可用，当前模式未更改。"));
 	const reload = reloadCommand();
+	const service = shellQuote(files.service);
+	// The migration of the previous model's rules is part of this transaction:
+	// the trial loads the migrated candidate, and app_profiles.conf (deny) or
+	// target_path.conf (global/allow) is replaced only after the receipt.
 	const script = `umask 077
 mkdir -p ${shellQuote(CONFIGDIR)} || exit 30
 cfg=${shellQuote(files.ruleMode)}
@@ -4173,32 +4211,78 @@ if [ -e "$cfg" ] || [ -L "$cfg" ]; then
 fi
 ${reloadLockShell()}
 stage=''
+work=''
 finish() {
 	[ -z "$stage" ] || rm -f "$stage"
+	[ -z "$work" ] || rm -rf "$work"
 	drop_reload_lock || true
 }
 trap finish EXIT
 take_reload_lock || exit 30
 stage=$(mktemp ${shellQuote(CONFIGDIR + "/.rule-mode.XXXXXX")}) || exit 30
+work=$(mktemp -d ${shellQuote(CONFIGDIR + "/.profile-write.XXXXXX")}) || exit 30
 mode=${shellQuote(mode)}
 printf '%s\n' "$mode" > "$stage" || exit 30
+migration=$(sh ${service} --migrate-rule-mode "$mode" "$work") || { printf '%s\n' "$migration" >&2; exit 34; }
+request=''
+active=''
+staged=''
+live=''
 if [ "$mode" = deny ]; then
-	sh ${shellQuote(files.service)} --check-app-profiles ${shellQuote(files.appProfiles)} || exit 31
+	staged="$work/candidate"
+	live=${shellQuote(files.appProfiles)}
+	sh ${service} --check-app-profiles "$staged" || exit 31
+	active=$(printf '%s\n' "$migration" | sed -n 's/^PATHMASK_MIGRATION active //p')
+	case "$active" in ''|*[!0-9]*) exit 34 ;; esac
+	request="$(date +%s)$$"
+elif [ -f "$work/targets" ]; then
+	staged="$work/targets"
+	live=${shellQuote(files.targets)}
 fi
+replaced=0
+restore() {
+	[ "$replaced" = 1 ] || return 0
+	if [ -f "$work/previous" ]; then
+		mv -f "$work/previous" "$live"
+	else
+		rm -f "$live"
+	fi
+}
 recover() {
 	printf '%s\n' "$output" >&2
-	if ( ${reload} ) >/dev/null 2>&1; then
+	if restore && ( ${reload} ) >/dev/null 2>&1; then
 		printf '%s\n' RULE_MODE_UNCONFIRMED >&2
 		exit 32
 	fi
 	printf '%s\n' RULE_MODE_ROLLBACK_UNCONFIRMED >&2
 	exit 33
 }
-# Trial only: the stored mode is unchanged until the loader acknowledges it.
-output=$( export PATHMASK_RULE_MODE_REQUEST="$mode"; ${reload} ) || recover
+# Trial only: the stored mode and rules are unchanged until the loader
+# acknowledges the mode and, for the blacklist, the exact migrated table.
+output=$(
+	export PATHMASK_RULE_MODE_REQUEST="$mode"
+	if [ -n "$request" ]; then
+		export PATHMASK_PROFILE_REQUEST="$request" PATHMASK_APP_PROFILES_STAGE="$staged"
+	elif [ -n "$staged" ]; then
+		export PATHMASK_TARGET_PATHS_STAGE="$staged"
+	fi
+	${reload}
+) || recover
 printf '%s\n' "$output" | grep -Fxq "PATHMASK_RULE_MODE_OK $mode" || recover
+if [ -n "$request" ]; then
+	printf '%s\n' "$output" | grep -Fxq "PATHMASK_APP_PROFILES_OK $request $active" || recover
+fi
+if [ -n "$staged" ]; then
+	if [ -e "$live" ] || [ -L "$live" ]; then
+		cp -p "$live" "$work/previous" || recover
+	fi
+	replaced=1
+	mv -f "$staged" "$live" || recover
+fi
 mv "$stage" "$cfg" || recover
-printf '%s\n' "$output"`;
+sh ${service} --record-rule-mode-migration "$mode" "$work" >/dev/null 2>&1 || true
+printf '%s\n' "$output"
+printf '%s\n' "$migration"`;
 	let output;
 	try {
 		output = await execShell(script);
@@ -4206,6 +4290,7 @@ printf '%s\n' "$output"`;
 		await refreshConfig().catch(() => {});
 		if (error.errno === 33) throw new Error(t("模式切换失败，上一模式的运行状态也未确认。"));
 		if (error.errno === 32) throw new Error(t("未能确认模式切换；保留已保存模式。"));
+		if (error.errno === 34) throw new Error(t("无法迁移旧版规则，当前模式未更改：{0}", [error.stderr.trim() || error.message]));
 		throw error;
 	}
 	if (!linesFromText(output).includes("PATHMASK_RULE_MODE_OK " + mode))
@@ -4213,7 +4298,50 @@ printf '%s\n' "$output"`;
 	ruleScopeDraft = "";
 	setLogContent("kernel", output);
 	await refreshConfig();
-	showToast(t("已应用「{0}」模式。", [scopeLabel(mode)]));
+	const summary = migrationSummary(output);
+	showToast(summary.text
+		? t("已应用「{0}」模式。", [scopeLabel(mode)]) + " " + summary.text
+		: t("已应用「{0}」模式。", [scopeLabel(mode)]));
+	if (summary.detail) statusText.textContent = summary.detail;
+}
+
+// Summarize the PATHMASK_MIGRATION report of an acknowledged mode switch:
+// what moved into the new model and what was skipped, with the reason.
+function migrationSummary(output) {
+	const rows = linesFromText(output)
+		.filter(line => line.startsWith("PATHMASK_MIGRATION "))
+		.map(line => line.slice("PATHMASK_MIGRATION ".length));
+	const pick = kind => rows.filter(row => row === kind || row.startsWith(kind + " "))
+		.map(row => row.slice(kind.length + 1));
+	const newApps = pick("app-new");
+	const mergedApps = pick("app-merged").filter(row => !/ 0$/.test(row));
+	const disabledApps = pick("app-disabled").filter(row => !/ 0$/.test(row));
+	const migratedPaths = pick("path");
+	const sharedPaths = pick("shared-path");
+	const skippedPaths = [...pick("skip-dynamic"), ...pick("skip-invalid"), ...pick("skip-pattern")];
+	const missingPaths = pick("skip-missing");
+	const skippedPackages = pick("skip-package");
+	const skippedUids = pick("skip-uid");
+	const parts = [];
+	const appCount = newApps.length + mergedApps.length + disabledApps.length;
+	if (appCount) parts.push(t("已将旧版黑名单的 {0} 条共享路径迁移到 {1} 个应用。", [migratedPaths.length, appCount]));
+	else if (pick("app-nopath").length) parts.push(t("旧版黑名单没有可迁移的路径，未创建应用配置。"));
+	if (disabledApps.length) parts.push(t("{0} 个已停用的应用配置保持停用。", [disabledApps.length]));
+	if (sharedPaths.length) parts.push(t("已将 {0} 条逐应用路径加入共享路径。", [sharedPaths.length]));
+	if (rows.includes("profiles-invalid")) parts.push(t("逐应用配置无效，未合并其路径。"));
+	const skipped = [];
+	if (skippedPaths.length) skipped.push(t("{0} 条动态或无效路径", [skippedPaths.length]));
+	if (missingPaths.length) skipped.push(t("{0} 条当前不存在的路径", [missingPaths.length]));
+	if (skippedPackages.length) skipped.push(t("{0} 个未安装或无法解析的应用", [skippedPackages.length]));
+	if (skippedUids.length) skipped.push(t("{0} 个无法解析的 UID", [skippedUids.length]));
+	if (skipped.length) parts.push(t("已跳过：{0}。", [skipped.join(t("、"))]));
+	const details = [];
+	const list = items => items.slice(0, 6).join(", ") + (items.length > 6 ? " …" : "");
+	if (skippedPaths.length) details.push(t("未迁移的路径：{0}", [list(skippedPaths)]));
+	if (missingPaths.length) details.push(t("不存在的路径：{0}", [list(missingPaths)]));
+	if (skippedPackages.length) details.push(t("未迁移的应用：{0}", [list(skippedPackages)]));
+	if (skippedUids.length) details.push(t("未解析的 UID：{0}", [list(skippedUids)]));
+	return { text: parts.join(" "), detail: details.join("；") };
 }
 
 // write_op_policy is an insmod parameter fed by service.sh from the
@@ -4227,6 +4355,38 @@ async function applyWritePolicy() {
 	showToast(result === "empty" ? t("没有启用的应用路径，黑名单不会对任何应用生效。")
 		: result === "scene-pending" ? t("热重载完成，后台继续等待 Scene 启动")
 			: t(`写入伪装已切换为「{0}」`, [writePolicyLabel(value)]));
+}
+
+// auto_scene_debugfs is a device-level protection setting applied from the
+// settings page. Like the write policy it persists to its conf and takes
+// effect through a hot reload of the saved settings.
+async function applyAutoSceneDebugfs() {
+	const enabled = $("#autoSceneDebugfsInput").checked;
+	await writeLines(files.autoSceneDebugfs, [enabled ? "1" : "0"]);
+	statusText.textContent = t("正在应用 Scene 自动识别...");
+	const result = await reloadSavedSettings();
+	if (result === "empty") {
+		showToast(t("没有启用的应用路径，黑名单不会对任何应用生效。"));
+		return;
+	}
+	if (result === "scene-pending") {
+		showToast(t("热重载完成，后台继续等待 Scene 启动"));
+		return;
+	}
+	if (!enabled) {
+		showToast(t("已关闭 Scene 自动识别"));
+		return;
+	}
+	const sceneState = lastSnapshot.sceneDebugfsState || {};
+	if (sceneState.status === "no-package") {
+		showToast(t("热重载完成；未安装 Scene，已跳过自动识别"));
+	} else if (sceneState.status === "late-watching") {
+		showToast(t("热重载完成，后台继续等待 Scene 启动"));
+	} else if (sceneState.status !== "found" && sceneState.status !== "late-found") {
+		showToast(t("热重载完成，但当前未识别到 Scene debugfs"));
+	} else {
+		showToast(t("热重载完成"));
+	}
 }
 
 async function reloadModule() {
@@ -4284,6 +4444,14 @@ async function restoreDefaults() {
 	await writeLines(files.allowUids, []);
 	await writeLines(files.allowSystemUids, DEFAULT_ALLOW_SYSTEM_UIDS);
 	await writeLines(files.waitSeconds, [String(DEFAULT_WAIT_SECONDS)]);
+	// Drop any saved rule mode so the install returns to the legacy loader
+	// (no rule_mode.conf = legacy behaviour). Writing a value would instead
+	// keep the new mode loader active with "deny". The migration marks go too,
+	// so the next mode switch migrates the restored rules from scratch.
+	const marks = ["legacy-deny", "legacy-deny.paths", "profile-paths", "profile-paths.paths"]
+		.map(name => shellQuote(`${CONFIGDIR}/.migrated-${name}`)).join(" ");
+	await execShell(`rm -f ${shellQuote(files.ruleMode)} ${marks} 2>/dev/null || true`);
+	ruleScopeDraft = "";
 	await refreshConfig();
 	showToast(t("已恢复默认配置，重启后生效"));
 }
@@ -4732,10 +4900,7 @@ for (const radio of $$('input[name="writePolicy"]')) {
 }
 $("#autoSceneDebugfsInput").addEventListener("change", () => {
 	const enabled = $("#autoSceneDebugfsInput").checked;
-	const node = $("#autoSceneDebugfsStatus");
-	node.textContent = enabled ? t("保存并热重载或重启后生效") : "";
-	node.hidden = !enabled;
-	updateHealthList();
+	runAction(enabled ? t("正在启用 Scene 自动识别...") : t("正在停用 Scene 自动识别..."), applyAutoSceneDebugfs).catch(() => refreshConfig());
 });
 for (const cb of document.querySelectorAll('#allowSystemUidsDetails input[data-allow-system-uid]')) {
 	cb.addEventListener("change", updateHealthList);

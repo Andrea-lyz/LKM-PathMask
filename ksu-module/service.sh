@@ -48,6 +48,13 @@ AUTO_SCENE_DEBUGFS_CONFIG="$PERSIST_DIR/auto_scene_debugfs.conf"
 PROC_GUARD_CONFIG="$PERSIST_DIR/procguard.conf"
 APP_PROFILES_CONFIG="$PERSIST_DIR/app_profiles.conf"
 RULE_MODE_CONFIG="$PERSIST_DIR/rule_mode.conf"
+# Fingerprints of the inputs each mode migration last carried over, so a
+# repeated switch neither duplicates entries nor revives ones removed since.
+LEGACY_DENY_MIGRATION_MARK="$PERSIST_DIR/.migrated-legacy-deny"
+PROFILE_PATHS_MIGRATION_MARK="$PERSIST_DIR/.migrated-profile-paths"
+# Paths each direction moved, so the other direction never moves them back.
+LEGACY_DENY_MIGRATED_PATHS="$LEGACY_DENY_MIGRATION_MARK.paths"
+PROFILE_PATHS_CARRIED_PATHS="$PROFILE_PATHS_MIGRATION_MARK.paths"
 RELOAD_LOCK_DIR="$PERSIST_DIR/.profile-apply-lock"
 SCENE_DEBUGFS_PATHS_PATH="$PERSIST_DIR/scene_debugfs_paths"
 SCENE_DEBUGFS_STATE_PATH="$PERSIST_DIR/scene_debugfs_state"
@@ -74,7 +81,7 @@ RULE_MODE=""
 SCENE_WATCH_STARTED=0
 # A background reload may outlive the UI request that started its watcher.
 if [ "${PATHMASK_SCENE_WATCH_RELOAD:-0}" = "1" ]; then
-	unset PATHMASK_RULE_MODE_REQUEST PATHMASK_PROFILE_REQUEST PATHMASK_APP_PROFILES_STAGE
+	unset PATHMASK_RULE_MODE_REQUEST PATHMASK_PROFILE_REQUEST PATHMASK_APP_PROFILES_STAGE PATHMASK_TARGET_PATHS_STAGE
 	unset PATHMASK_REQUIRE_RELOAD_RECEIPT PATHMASK_RESET_FAIL_GUARD PATHMASK_IGNORE_FAIL_GUARD
 fi
 RULE_MODE_REQUEST=${PATHMASK_RULE_MODE_REQUEST:-}
@@ -527,7 +534,7 @@ start_scene_debugfs_watcher() {
 
 	write_scene_debugfs_state "late-watching" "$APPLIED_ENABLED" "initial scan found no mount; detached background watcher starting"
 	(
-		unset PATHMASK_RULE_MODE_REQUEST PATHMASK_PROFILE_REQUEST PATHMASK_APP_PROFILES_STAGE
+		unset PATHMASK_RULE_MODE_REQUEST PATHMASK_PROFILE_REQUEST PATHMASK_APP_PROFILES_STAGE PATHMASK_TARGET_PATHS_STAGE
 		unset PATHMASK_REQUIRE_RELOAD_RECEIPT PATHMASK_RESET_FAIL_GUARD PATHMASK_IGNORE_FAIL_GUARD
 		export PATHMASK_SCENE_APPLIED="$APPLIED_ENABLED"
 		if command -v setsid >/dev/null 2>&1; then
@@ -1332,6 +1339,121 @@ if [ "${1:-}" = "--check-app-profiles" ]; then
 	exit 1
 fi
 
+# Mode migration workspaces share the staged-profile prefix so a deny trial
+# can load the migrated table through PATHMASK_APP_PROFILES_STAGE.
+migration_workspace_ok() {
+	case "$1" in
+		"$PERSIST_DIR"/.profile-write.*) ;;
+		*) return 1 ;;
+	esac
+	case "${1#"$PERSIST_DIR"/.profile-write.}" in
+		''|*/*|.|..) return 1 ;;
+	esac
+	[ -d "$1" ] && [ ! -L "$1" ]
+}
+
+legacy_deny_fingerprint() {
+	pm_config_fingerprint "$DENY_PACKAGES_CONFIG" "$DENY_UIDS_CONFIG" "$CONFIG_PATH" "$HIDE_DIRENTS_CONFIG"
+}
+
+profile_paths_fingerprint() {
+	pm_config_fingerprint "$APP_PROFILES_CONFIG"
+}
+
+read_migration_mark() {
+	if [ -f "$1" ] && [ ! -L "$1" ]; then
+		head -n 1 "$1" | tr -d '\r'
+	fi
+}
+
+write_migration_mark() {
+	printf '%s\n' "$2" > "$1.tmp" && mv -f "$1.tmp" "$1"
+}
+
+# Add the paths listed in $2 to the path list $1 (kept sorted and unique).
+append_migrated_paths() {
+	[ -s "$2" ] || return 0
+	{
+		if [ -f "$1" ] && [ ! -L "$1" ]; then cat "$1"; fi
+		cat "$2"
+	} | LC_ALL=C sort -u > "$1.tmp" && mv -f "$1.tmp" "$1"
+}
+
+# Prepare the candidates a mode trial loads: $2/candidate (deny) or
+# $2/targets (global/allow, only when a path is added). Live files are not
+# touched; the WebUI replaces them only after the trial is acknowledged.
+prepare_rule_mode_migration() {
+	MIGRATION_MODE="$1"
+	MIGRATION_WORK="$2"
+	APP_PROFILE_ERROR="cannot fingerprint the configuration"
+	MIGRATION_LEGACY_FP=$(legacy_deny_fingerprint) && [ "${#MIGRATION_LEGACY_FP}" -eq 64 ] || return 1
+	MIGRATION_PROFILES_FP=$(profile_paths_fingerprint) && [ "${#MIGRATION_PROFILES_FP}" -eq 64 ] || return 1
+	printf '%s\n%s\n' "$MIGRATION_LEGACY_FP" "$MIGRATION_PROFILES_FP" > "$MIGRATION_WORK/fingerprints" || return 1
+	case "$MIGRATION_MODE" in
+		deny)
+			if [ "$(read_migration_mark "$LEGACY_DENY_MIGRATION_MARK")" = "$MIGRATION_LEGACY_FP" ]; then
+				# Already carried over: only restage the current table.
+				pm_migration_report unchanged
+				pm_migrate_legacy_deny "$APP_PROFILES_CONFIG" "$MIGRATION_WORK/none" \
+					"$MIGRATION_WORK/none" "$MIGRATION_WORK/none" "$HIDE_DIRENTS_CONFIG" "$MIGRATION_WORK"
+			else
+				pm_migrate_legacy_deny "$APP_PROFILES_CONFIG" "$CONFIG_PATH" "$DENY_PACKAGES_CONFIG" \
+					"$DENY_UIDS_CONFIG" "$HIDE_DIRENTS_CONFIG" "$MIGRATION_WORK" "$PROFILE_PATHS_CARRIED_PATHS"
+			fi
+			;;
+		global|allow)
+			if [ "$(read_migration_mark "$PROFILE_PATHS_MIGRATION_MARK")" = "$MIGRATION_PROFILES_FP" ]; then
+				pm_migration_report unchanged
+				return 0
+			fi
+			pm_carry_profile_paths "$APP_PROFILES_CONFIG" "$CONFIG_PATH" "$MIGRATION_WORK" "$LEGACY_DENY_MIGRATED_PATHS"
+			;;
+		*) return 1 ;;
+	esac
+}
+
+# Called after the acknowledged trial replaced the live files. A migration in
+# one direction must not make the other direction re-broadcast its result,
+# so an up-to-date opposite mark is advanced to the new file contents.
+record_rule_mode_migration() {
+	{ read -r MIGRATION_LEGACY_BEFORE && read -r MIGRATION_PROFILES_BEFORE; } < "$2/fingerprints" || return 1
+	MIGRATION_LEGACY_FP=$(legacy_deny_fingerprint) || return 1
+	MIGRATION_PROFILES_FP=$(profile_paths_fingerprint) || return 1
+	case "$1" in
+		deny)
+			write_migration_mark "$LEGACY_DENY_MIGRATION_MARK" "$MIGRATION_LEGACY_FP" || return 1
+			append_migrated_paths "$LEGACY_DENY_MIGRATED_PATHS" "$2/paths" || return 1
+			if [ "$(read_migration_mark "$PROFILE_PATHS_MIGRATION_MARK")" = "$MIGRATION_PROFILES_BEFORE" ]; then
+				write_migration_mark "$PROFILE_PATHS_MIGRATION_MARK" "$MIGRATION_PROFILES_FP" || return 1
+			fi
+			;;
+		global|allow)
+			write_migration_mark "$PROFILE_PATHS_MIGRATION_MARK" "$MIGRATION_PROFILES_FP" || return 1
+			append_migrated_paths "$PROFILE_PATHS_CARRIED_PATHS" "$2/added" || return 1
+			if [ "$(read_migration_mark "$LEGACY_DENY_MIGRATION_MARK")" = "$MIGRATION_LEGACY_BEFORE" ]; then
+				write_migration_mark "$LEGACY_DENY_MIGRATION_MARK" "$MIGRATION_LEGACY_FP" || return 1
+			fi
+			;;
+		*) return 1 ;;
+	esac
+}
+
+if [ "${1:-}" = "--migrate-rule-mode" ] || [ "${1:-}" = "--record-rule-mode-migration" ]; then
+	if [ "$#" -ne 3 ] || ! migration_workspace_ok "$3"; then
+		printf 'migration: invalid arguments\n' >&2
+		exit 2
+	fi
+	if [ "$1" = "--migrate-rule-mode" ]; then
+		if prepare_rule_mode_migration "$2" "$3"; then
+			exit 0
+		fi
+		printf 'migration: %s\n' "${APP_PROFILE_ERROR:-invalid arguments}" >&2
+		exit 1
+	fi
+	record_rule_mode_migration "$2" "$3"
+	exit "$?"
+fi
+
 init_persistent_config
 
 if [ "${1:-}" = "--apply-procguard" ]; then
@@ -1424,7 +1546,22 @@ else
 	write_scene_debugfs_state "disabled" "0" ""
 fi
 
-if [ "$RULE_MODE" != deny ] && [ -f "$CONFIG_PATH" ]; then
+# A shared-path mode trial may load a migrated candidate instead of the saved
+# list; the WebUI replaces target_path.conf only after acknowledgment.
+TARGET_SOURCE="$CONFIG_PATH"
+if [ -n "${PATHMASK_TARGET_PATHS_STAGE:-}" ]; then
+	if [ "$RULE_MODE_REQUEST" != global ] && [ "$RULE_MODE_REQUEST" != allow ]; then
+		exit 2
+	fi
+	case "$PATHMASK_TARGET_PATHS_STAGE" in
+		"$PERSIST_DIR"/.profile-write.*/targets) ;;
+		*) exit 2 ;;
+	esac
+	migration_workspace_ok "${PATHMASK_TARGET_PATHS_STAGE%/targets}" || exit 2
+	[ -f "$PATHMASK_TARGET_PATHS_STAGE" ] && [ ! -L "$PATHMASK_TARGET_PATHS_STAGE" ] || exit 2
+	TARGET_SOURCE="$PATHMASK_TARGET_PATHS_STAGE"
+fi
+if [ "$RULE_MODE" != deny ] && [ -f "$TARGET_SOURCE" ]; then
 	while IFS= read -r CONFIG_LINE || [ -n "$CONFIG_LINE" ]; do
 		CONFIG_LINE="$(printf '%s' "$CONFIG_LINE" | tr -d '\r')"
 		case "$CONFIG_LINE" in
@@ -1433,7 +1570,7 @@ if [ "$RULE_MODE" != deny ] && [ -f "$CONFIG_PATH" ]; then
 				;;
 		esac
 		add_target_raw_line "$CONFIG_LINE"
-	done < "$CONFIG_PATH"
+	done < "$TARGET_SOURCE"
 	# Initial expansion. wait_for_targets() will rebuild on every loop
 	# iteration so glob lines stay current.
 	rebuild_target_paths

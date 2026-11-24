@@ -315,6 +315,19 @@ edits these files for you, but they can also be inspected manually:
   tab writes this file and applies the change immediately.
 - `/data/adb/pathmask/rule_mode.conf`: optional explicit selection (`global`,
   `deny`, or `allow`). When absent, the previous rule behavior is retained.
+  Applying a mode migrates the rules that would otherwise go dormant, inside
+  the same acknowledged reload (nothing is replaced without the receipt).
+  Blacklist: every installed app of the legacy blacklist (`deny_packages.conf`,
+  plus `deny_uids.conf` UIDs owned by exactly one app) gets an enabled per-app
+  profile with every existing literal path of `target_path.conf`; directory
+  filtering follows `hide_dirents.conf`, and existing profiles only gain the
+  missing paths. Glob/dynamic lines (Scene's randomized `/dev/<hash>`),
+  missing or invalid paths, uninstalled packages and unresolved UIDs are
+  skipped and listed in the result. Global/Whitelist: paths of enabled per-app
+  profiles that the shared list lacks are appended to `target_path.conf`
+  (paths containing glob characters are skipped). Each direction runs again
+  only after its source rules change, so repeated switches neither duplicate
+  entries nor revive removed ones (`.migrated-*` marks in the same folder).
 - `/data/adb/pathmask/app_profiles.conf`: per-app rules. In Blacklist mode, the
   Configuration page merges confirmed changes without overwriting other apps. It saves the
   merged configuration only after a kernel acknowledgment. Each app block contains:
@@ -326,8 +339,9 @@ edits these files for you, but they can also be inspected manually:
 
   Each `path` line belongs to the `app` line above it. Only enabled apps with
   at least one path become a rule. These rules are independent of
-  `target_path.conf` and `scope_mode.conf`: they never inherit the legacy
-  shared paths and never change them. A scoped legacy configuration without
+  `target_path.conf` and `scope_mode.conf`: at runtime they never inherit the
+  legacy shared paths and never change them (only the mode migration above
+  copies paths between the two). A scoped legacy configuration without
   resolved UIDs is not loaded alongside the per-app rules. Paths must be
   resolvable, at most 255 UTF-8 bytes long, and must not contain commas or
   semicolons. Rules are validated and committed as a whole, not partially.

@@ -338,6 +338,49 @@ test("explicit mode apply hydrates the saved selection only after a service rece
 	} finally { await settle(page); page.close(); }
 });
 
+test("blacklist switch migrates legacy rules inside the confirmed transaction and reports them", async () => {
+	const root = "/data/adb/pathmask/";
+	const conf = {};
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("/parameters/scope_mode")) return { stdout: conf[root + "rule_mode.conf"] || "deny" };
+		if (!command.includes('export PATHMASK_RULE_MODE_REQUEST="$mode"')) return undefined;
+		conf[root + "rule_mode.conf"] = "deny";
+		conf[root + "boot_state"] = "state=loaded\nrule_mode=deny\n";
+		return { stdout: [
+			"PATHMASK_RULE_MODE_OK deny",
+			"PATHMASK_APP_PROFILES_OK 1792000000 4",
+			"PATHMASK_RELOAD_OK active",
+			"PATHMASK_MIGRATION skip-uid 99999",
+			"PATHMASK_MIGRATION path /dev/cpuset/scene-daemon",
+			"PATHMASK_MIGRATION path /system_ext/app/SoterService",
+			"PATHMASK_MIGRATION skip-dynamic dir:/dev/???/scene_mode_category",
+			"PATHMASK_MIGRATION app-new 0 com.chunqiunativecheck 2",
+			"PATHMASK_MIGRATION app-merged 0 luna.safe.luna 1",
+			"PATHMASK_MIGRATION app-merged 0 com.eltavine.duckdetector 0",
+			"PATHMASK_MIGRATION active 4",
+		].join("\n") };
+	} } }));
+	try {
+		page.$('#homePanel input[value="global"]').click();
+		page.$('#homePanel input[value="deny"]').click();
+		page.$("#applyRuleModeBtn").click();
+		await waitFor(page, () => page.$("#toast").textContent.includes("迁移到 2 个应用"), "migration summary");
+		const toast = page.$("#toast").textContent;
+		assert(toast.includes("2 条共享路径") && toast.includes("1 条动态或无效路径") && toast.includes("1 个无法解析的 UID"),
+			`summary names what moved and what was skipped: ${toast}`);
+		const change = page.stub.calls.find(command => command.includes("--migrate-rule-mode"));
+		assert(change, "the mode switch prepares a migration");
+		const at = needle => change.indexOf(needle);
+		assert(at("--migrate-rule-mode") < at("--check-app-profiles \"$staged\""), "the migrated candidate is checked");
+		assert(at("--check-app-profiles") < at("PATHMASK_APP_PROFILES_STAGE=\"$staged\""), "the trial loads the migrated candidate");
+		assert(at('grep -Fxq "PATHMASK_APP_PROFILES_OK $request $active"') < at('mv -f "$staged" "$live"'),
+			"the kernel receipt gates replacing app_profiles.conf");
+		assert(at('mv -f "$staged" "$live"') < at('mv "$stage" "$cfg"'), "rules are replaced before the mode");
+		assert(at('mv "$stage" "$cfg"') < at("--record-rule-mode-migration"), "the migration is recorded only after commit");
+		assert(change.includes("restore &&"), "a failed commit restores the previous rules before recovering");
+	} finally { await settle(page); page.close(); }
+});
+
 test("same-mode reload reports unconfirmed when startup skips loading", async () => {
 	const root = "/data/adb/pathmask/";
 	let loaded = true;
