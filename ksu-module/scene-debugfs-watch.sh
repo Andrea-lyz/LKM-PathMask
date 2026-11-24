@@ -5,6 +5,9 @@ MODULE_NAME=pathmask
 LOG_TAG=pathmask
 PERSIST_DIR=/data/adb/pathmask
 AUTO_CONFIG="$PERSIST_DIR/auto_scene_debugfs.conf"
+RULE_MODE_CONFIG="$PERSIST_DIR/rule_mode.conf"
+RELOAD_LOCK_DIR="$PERSIST_DIR/.profile-apply-lock"
+RELOAD_LOCK_HELD=0
 STATE_PATH="$PERSIST_DIR/scene_debugfs_state"
 PATHS_PATH="$PERSIST_DIR/scene_debugfs_paths"
 BOOT_STATE_PATH="$PERSIST_DIR/boot_state"
@@ -63,6 +66,11 @@ write_state() {
 }
 
 should_stop() {
+	if [ -e "$RULE_MODE_CONFIG" ] || [ -L "$RULE_MODE_CONFIG" ]; then
+		[ -f "$RULE_MODE_CONFIG" ] && [ ! -L "$RULE_MODE_CONFIG" ] || return 0
+		SAVED_MODE=$(cat "$RULE_MODE_CONFIG" 2>/dev/null) || return 0
+		case "$SAVED_MODE" in global|allow) ;; *) return 0 ;; esac
+	fi
 	config_enabled || return 0
 	[ ! -e "$MODDIR/disable" ] || return 0
 	[ ! -e "$MODDIR/remove" ] || return 0
@@ -136,15 +144,62 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 	mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 fi
 printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
-trap 'rm -f "$LOCK_DIR/pid" 2>/dev/null || true; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT HUP INT TERM
+# The reload lock is shared with the WebUI (see reloadLockShell in app.js).
+# Owners record their pid so a lock left by a killed shell can be reclaimed.
+reload_lock_owner_alive() {
+	OWNER=$(cat "$RELOAD_LOCK_DIR/pid" 2>/dev/null) || OWNER=''
+	case "$OWNER" in ''|*[!0-9]*) return 1 ;; esac
+	kill -0 "$OWNER" 2>/dev/null
+}
+
+reload_lock_busy() {
+	[ -d "$RELOAD_LOCK_DIR" ] && reload_lock_owner_alive
+}
+
+take_reload_lock() {
+	if ! mkdir "$RELOAD_LOCK_DIR" 2>/dev/null; then
+		[ -d "$RELOAD_LOCK_DIR" ] && [ ! -L "$RELOAD_LOCK_DIR" ] || return 1
+		reload_lock_owner_alive && return 1
+		# Give a new owner time to write its pid after mkdir.
+		sleep 1
+		reload_lock_owner_alive && return 1
+		rm -f "$RELOAD_LOCK_DIR/pid" 2>/dev/null
+		rmdir "$RELOAD_LOCK_DIR" 2>/dev/null || return 1
+		mkdir "$RELOAD_LOCK_DIR" 2>/dev/null || return 1
+	fi
+	RELOAD_LOCK_HELD=1
+	printf '%s\n' "$$" > "$RELOAD_LOCK_DIR/pid" || { release_reload_lock; return 1; }
+}
+
+release_reload_lock() {
+	if [ "$RELOAD_LOCK_HELD" = 1 ]; then
+		rm -f "$RELOAD_LOCK_DIR/pid" 2>/dev/null || true
+		rmdir "$RELOAD_LOCK_DIR" 2>/dev/null || true
+		RELOAD_LOCK_HELD=0
+	fi
+}
+
+cleanup() {
+	release_reload_lock
+	rm -f "$LOCK_DIR/pid" 2>/dev/null || true
+	rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 
 END=$(( $(date +%s 2>/dev/null || echo 0) + WATCH_SECONDS ))
 RELOAD_FAILURES=0
 FOUND_PATHS=""
-write_state late-watching "$WATCH_APPLIED" "detached background watcher pid=$$ active for ${WATCH_SECONDS}s"
 log_i "Scene debugfs late watcher started (max ${WATCH_SECONDS}s)"
 
 while :; do
+	# A foreground transaction may be testing a mode that is not yet saved.
+	if reload_lock_busy; then
+		NOW="$(date +%s 2>/dev/null || echo 0)"
+		[ "$NOW" -lt "$END" ] || exit 0
+		sleep "$POLL_SECONDS"
+		continue
+	fi
 	should_stop && {
 		log_i "Scene debugfs late watcher stopped by config/module state"
 		exit 0
@@ -157,13 +212,17 @@ while :; do
 	fi
 
 	if find_scene_debugfs; then
+		if ! take_reload_lock; then
+			sleep "$POLL_SECONDS"
+			continue
+		fi
+		# Re-read the saved mode and pause state under the same lock as WebUI.
+		should_stop && exit 0
 		if grep -q "^$MODULE_NAME " /proc/modules 2>/dev/null && running_targets_include_found; then
 			write_state found 1 "runtime targets already loaded"
 			exit 0
 		fi
 
-		# Re-check pause/disable immediately before touching the loaded module.
-		should_stop && exit 0
 		write_state late-found-pending "$WATCH_APPLIED" "late mount found; controlled reload starting"
 		if grep -q "^$MODULE_NAME " /proc/modules 2>/dev/null; then
 			if ! rmmod "$MODULE_NAME" 2>/dev/null; then
@@ -173,6 +232,7 @@ while :; do
 					exit 0
 				fi
 				write_state late-reload-retry "$WATCH_APPLIED" "rmmod failed; retry $RELOAD_FAILURES/3"
+				release_reload_lock
 				sleep 10
 				continue
 			fi

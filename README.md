@@ -313,8 +313,10 @@ edits these files for you, but they can also be inspected manually:
 - `/data/adb/pathmask/procguard.conf`: isolation-protection switch. Default
   `0`. `1` loads the companion `procguard.ko` at boot; the WebUI Protection
   tab writes this file and applies the change immediately.
-- `/data/adb/pathmask/app_profiles.conf`: per-app rules. The WebUI Apps page
-  merges your confirmed changes without overwriting other apps. It saves the
+- `/data/adb/pathmask/rule_mode.conf`: optional explicit selection (`global`,
+  `deny`, or `allow`). When absent, the previous rule behavior is retained.
+- `/data/adb/pathmask/app_profiles.conf`: per-app rules. In Blacklist mode, the
+  Configuration page merges confirmed changes without overwriting other apps. It saves the
   merged configuration only after a kernel acknowledgment. Each app block contains:
 
   ```text
@@ -347,7 +349,18 @@ target/UID fallback budget remains unchanged.
 
 Open KernelSU Manager, enter PathMask WebUI, then use:
 
-- `配置`: edit paths, mode, packages, and direct UIDs.
+- **Home**: choose Global, Blacklist, or Whitelist. Selection changes the editor only;
+  **Apply selected mode** changes the runtime policy after saving its configuration.
+- **Configuration**: Global shows only the shared path editor. Blacklist shows a
+  searchable list and opens individual path profiles. Whitelist shows shared
+  paths followed by searchable switches that edit the manual whitelist. Actual
+  shared-path exemptions are shown separately. Apply Blacklist mode before
+  using **Apply to module** for drafts.
+- **Settings**: language, legacy configuration, and the tools below.
+
+Upgrades do not convert existing rules or switch their behavior automatically.
+After an explicit mode change, only the selected rule source is applied. Other
+modes retain their configuration. Global and Whitelist share the path list.
 - `诊断`: view health checks and generate a report.
 - `日志`: page through script, kernel, status, and config logs.
 - `报告`: copy a single report for issue reports.

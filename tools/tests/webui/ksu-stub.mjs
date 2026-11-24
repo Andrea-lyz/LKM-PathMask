@@ -118,6 +118,7 @@ const RULES = [
 	["grep -E '^(pathmask|procguard|nohello) '", () =>
 		"pathmask 163840 0 - Live 0xffffffffc0800000 (O)"],
 	["cat /proc/modules", () => MODULES_ALL],
+	["parameters/scope_mode", () => "deny"],
 	["parameters/deny_uids", () => "10123,10124,10125"],
 	["parameters/resolved_count", () => "3"],
 	["parameters/blocked_hits", () => ""],
@@ -187,6 +188,7 @@ function confLookup(command, overrides) {
 }
 
 export function resolveCommand(command, confOverrides) {
+	if (command.includes("PATHMASK_REQUIRE_RELOAD_RECEIPT=1")) return "PATHMASK_RELOAD_OK active\n";
 	if (command.includes("profile_snapshot || exit 22")) return "missing\n";
 	const fromConf = confLookup(command, confOverrides);
 	if (fromConf !== null) return fromConf;

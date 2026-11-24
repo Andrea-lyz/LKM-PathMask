@@ -66,14 +66,35 @@
 					<strong id="uidCount">0</strong>
 				</div>
 			</section>
+			<section class="panel directoryPanel">
+				<div class="sectionTitle">
+					<h2 id="scopeTitle" data-i18n>作用范围</h2>
+				</div>
+				<div class="segmented" role="radiogroup" aria-labelledby="scopeTitle">
+					<label>
+						<input type="radio" name="scope" value="global">
+						<span data-i18n>全局</span>
+					</label>
+					<label>
+						<input type="radio" name="scope" value="deny">
+						<span data-i18n>黑名单</span>
+					</label>
+					<label>
+						<input type="radio" name="scope" value="allow">
+						<span data-i18n>白名单</span>
+					</label>
+				</div>
+				<p id="ruleModeHint" class="hint"></p>
+				<p id="ruleModeStatus" class="hint" role="status" aria-live="polite"></p>
+				<button id="applyRuleModeBtn" class="primary" type="button" disabled data-i18n>应用所选模式</button>
+			</section>
 		</section>
 
 		<section id="appsPanel" class="tabPanel" aria-labelledby="dock-apps" tabindex="-1">
 			<div class="directoryBar">
-				<h1 data-i18n>已安装应用</h1>
+				<h1 data-i18n>应用黑名单</h1>
 				<div class="inlineControls">
 					<button id="applyProfilesBtn" type="button" class="tonal" data-i18n>应用到模块</button>
-					<button id="openLegacyRulesBtn" type="button" class="textButton" data-i18n>旧版规则</button>
 				</div>
 			</div>
 			<p class="hint directoryNotice" data-i18n>应用草稿前会合并模块已有规则，保留没有修改的应用。</p>
@@ -85,25 +106,10 @@
 				</div>
 				<p id="directoryStatus" class="hint" role="status" aria-live="polite"></p>
 				<p id="profileApplyState" class="hint" role="status" aria-live="polite"></p>
+				<p id="profileModeNotice" class="hint" hidden data-i18n>先在主页应用黑名单模式，再应用逐应用草稿。</p>
 				<ul id="directoryList" class="directoryList" hidden></ul>
 				<button id="directoryMoreBtn" type="button" class="textButton" hidden data-i18n>显示更多</button>
 			</section>
-			<details class="panel subPanel directoryCompatibility">
-				<summary data-i18n>草稿备份与升级兼容</summary>
-				<div class="directoryPanel">
-					<p class="hint" data-i18n>检查只读取上次加载的旧配置，不会切换模式。</p>
-					<button id="previewLegacyMigrationBtn" type="button" class="tonal" data-i18n>检查旧版配置</button>
-					<p id="legacyMigrationPreview" class="hint directoryMultiline" role="status" hidden></p>
-					<p class="hint" data-i18n>仅备份已保存的草稿。导入不会覆盖现有草稿或应用规则。</p>
-					<button id="exportAppDraftsBtn" type="button" data-i18n>生成草稿备份</button>
-					<label id="appDraftBackupOutputLabel" for="appDraftBackupOutput" class="hint" hidden data-i18n>草稿备份 JSON（请复制保留）</label>
-					<textarea id="appDraftBackupOutput" class="monoBox" rows="6" aria-labelledby="appDraftBackupOutputLabel" readonly hidden></textarea>
-					<label for="appDraftBackupInput" class="hint" data-i18n>粘贴 V2 草稿备份 JSON</label>
-					<textarea id="appDraftBackupInput" class="monoBox" rows="5" aria-describedby="appDraftBackupStatus" spellcheck="false"></textarea>
-					<button id="importAppDraftsBtn" type="button" class="tonal" data-i18n>导入草稿</button>
-					<p id="appDraftBackupStatus" class="hint" role="status" aria-live="polite"></p>
-				</div>
-			</details>
 		</section>
 
 		<section id="appDetailPanel" class="tabPanel" aria-labelledby="detailAppName" tabindex="-1">
@@ -143,28 +149,12 @@
 		</section>
 
 		<section id="configPanel" class="tabPanel" aria-labelledby="dock-apps" tabindex="-1">
-			<div class="directoryBar">
+			<div id="legacyRulesBar" class="directoryBar" hidden>
 				<h1 data-i18n>旧版规则</h1>
-				<button id="legacyBackBtn" type="button" class="textButton" data-i18n>返回应用列表</button>
+				<button id="legacyBackBtn" type="button" class="textButton" data-i18n>返回配置</button>
 			</div>
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 id="packagePanelTitle" data-i18n>应用黑名单</h2>
-					<div class="inlineControls">
-						<label class="miniToggle">
-							<input id="showSystemInput" type="checkbox">
-							<span data-i18n>系统应用</span>
-						</label>
-						<button id="loadAppsBtn" class="tonal" type="button" data-i18n>加载</button>
-					</div>
-				</div>
-				<input id="searchInput" type="search" aria-label="搜索包名" data-i18n-aria-label placeholder="搜索包名" data-i18n-placeholder>
-				<p id="scopeListHint" class="hint" data-i18n>黑名单模式：勾选的应用会看不到隐藏路径。</p>
-				<p id="appListCount" class="hint appListCount" aria-live="polite"></p>
-				<div id="appList" class="appList"></div>
-			</section>
-
-			<section class="panel">
+			<p id="legacyRulesStatus" class="hint" hidden data-i18n>这里保留原有规则供查看和编辑，不会转换成逐应用配置。</p>
+			<section id="sharedPathPanel" class="panel">
 				<div class="sectionTitle">
 					<h2 data-i18n>隐藏路径</h2>
 					<div class="inlineControls">
@@ -190,27 +180,6 @@
 					<span></span>
 				</div>
 				<div id="pathList" class="stack"></div>
-				<p class="hint" data-i18n>当前仍使用旧版配置：所选应用共用这组路径。</p>
-			</section>
-
-			<section class="panel">
-				<div class="sectionTitle">
-					<h2 id="scopeTitle" data-i18n>作用范围</h2>
-				</div>
-				<div class="segmented" role="group" aria-labelledby="scopeTitle">
-					<label>
-						<input type="radio" name="scope" value="global">
-						<span data-i18n>全局</span>
-					</label>
-					<label>
-						<input type="radio" name="scope" value="deny">
-						<span data-i18n>黑名单</span>
-					</label>
-					<label>
-						<input type="radio" name="scope" value="allow">
-						<span data-i18n>白名单</span>
-					</label>
-				</div>
 				<label class="switchRow">
 					<span data-i18n-lead>从 ls 列表中抹掉
 						<small class="hint" data-i18n-html>
@@ -221,7 +190,25 @@
 				</label>
 			</section>
 
-			<section class="panel">
+			<section id="scopeAppPanel" class="panel directoryPanel">
+				<div class="sectionTitle">
+					<h2 id="packagePanelTitle" data-i18n>应用黑名单</h2>
+					<div class="inlineControls">
+						<label class="miniToggle">
+							<input id="showSystemInput" type="checkbox">
+							<span data-i18n>系统应用</span>
+						</label>
+						<button id="loadAppsBtn" class="tonal" type="button" data-i18n>加载</button>
+					</div>
+				</div>
+				<input id="searchInput" type="search" aria-label="搜索名称、包名或 UID" data-i18n-aria-label placeholder="搜索名称、包名或 UID" data-i18n-placeholder>
+				<p id="scopeListHint" class="hint" data-i18n>开关只编辑手动白名单；运行中豁免状态另行显示（也可能来自高级 UID 或共享 UID）。</p>
+				<p id="appListCount" class="hint appListCount" aria-live="polite"></p>
+				<div id="appList" class="appList"></div>
+			</section>
+
+			<details id="scopeUidPanel" class="panel subPanel">
+				<summary data-i18n>高级 UID 选项</summary>
 				<div class="sectionTitle">
 					<h2 id="uidTitle" data-i18n>直接填写 UID</h2>
 				</div>
@@ -237,7 +224,7 @@
 						<label class="syscallRow"><input type="checkbox" data-allow-system-uid="2000"><span>UID 2000<small>shell / ADB / scrcpy</small></span></label>
 					</div>
 				</details>
-			</section>
+			</details>
 		</section>
 
 		<section id="settingsShell" class="settingsShell" aria-labelledby="dock-settings" hidden>
@@ -293,6 +280,10 @@
 						<input id="waitSecondsInput" type="number" min="1" max="600" step="1" inputmode="numeric" value="60">
 					</label>
 					<p class="hint" data-i18n>默认 60 秒。开机时 service.sh 会用这一段时间等待隐藏路径出现，并在 deny / allow 模式下等待包名解析为 UID。两个阶段共用同一段预算，到期就跳过加载。包名解析慢的设备可以调大。</p>
+				</section>
+				<section class="panel directoryPanel">
+					<h2 data-i18n>旧版规则</h2>
+					<button id="openLegacyRulesBtn" type="button" class="textButton" data-i18n>旧版规则</button>
 				</section>
 			</section>
 
@@ -428,7 +419,7 @@
 		</button>
 		<button id="dock-apps" class="liquidDockItem" type="button" data-dock-page="apps" aria-controls="appsPanel">
 			<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
-			<span data-i18n>应用</span>
+			<span data-i18n>配置</span>
 		</button>
 		<button id="dock-settings" class="liquidDockItem" type="button" data-dock-page="settings" aria-controls="settingsShell">
 			<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h6m4 0h8M3 12h11m4 0h3M3 18h2m4 0h12M9 4v4m5 2v4m-9 2v4"/></svg>

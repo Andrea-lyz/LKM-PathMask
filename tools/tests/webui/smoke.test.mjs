@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { JSDOM } from "jsdom";
-import { createKsuStub } from "./ksu-stub.mjs";
+import { createKsuStub, resolveCommand } from "./ksu-stub.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webroot = join(here, "..", "..", "..", "ksu-module", "webroot");
@@ -276,6 +276,186 @@ test("settings tabs expose tablist semantics and respond to arrow keys", async (
 	}
 });
 
+test("home selection shows exactly one mode's configuration without applying it", async () => {
+	const page = await bootReady(await bootPage());
+	try {
+		const choose = mode => {
+			page.$("#dock-home").click();
+			page.$('#homePanel input[name="scope"][value="' + mode + '"]').click();
+			page.$("#dock-apps").click();
+		};
+		const before = page.stub.calls.length;
+		assertEqual(page.$("#dock-apps span").textContent, "配置", "Dock is renamed");
+		choose("global");
+		assert(page.$("#configPanel").classList.contains("active"), "global opens the shared editor");
+		assert(!page.$("#sharedPathPanel").hidden && page.$("#scopeAppPanel").hidden && page.$("#scopeUidPanel").hidden, "global only shows the path card");
+		assert(!page.$("#appsPanel").classList.contains("active"), "no directory in global mode");
+		choose("allow");
+		await waitFor(page, () => page.$$(".allowAppRow").length === 3, "whitelist rows");
+		assert(!page.$("#scopeAppPanel").hidden, "whitelist shows the app list");
+		assert(page.$("#sharedPathPanel").nextElementSibling === page.$("#scopeAppPanel"), "shared paths precede the list");
+		const search = page.$("#searchInput");
+		search.value = "10123";
+		search.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+		assertEqual(page.$$(".allowAppRow").length, 1, "whitelist supports UID search");
+		page.$('.allowAppRow [role="switch"]').click();
+		assert(page.$("#configPanel").classList.contains("active") && !page.$("#appDetailPanel").classList.contains("active"), "whitelist has no detail page");
+		choose("deny");
+		await waitFor(page, () => page.$$(".directoryRow").length === 3, "blacklist rows");
+		assert(!page.$("#configPanel").classList.contains("active"), "blacklist has no shared path card");
+		assert(page.$("#profileModeNotice").hidden === false, "draft application needs an explicit active blacklist");
+		page.$(".directoryRow").click();
+		assert(page.$("#appDetailPanel").classList.contains("active"), "blacklist opens per-app paths");
+		choose("allow");
+		assertEqual(page.$("#searchInput").value, "10123", "search retained across switching");
+		assert(page.$('.allowAppRow [role="switch"]').checked, "whitelist selection retained");
+		assert(!page.stub.calls.slice(before).some(s => s.includes("rmmod") || s.includes(" > '/data/adb/pathmask/")), "selection and navigation do not activate or write any rules");
+	} finally { await settle(page); page.close(); }
+});
+
+test("explicit mode apply hydrates the saved selection only after a service receipt", async () => {
+	const conf = {};
+	let accept = false;
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("/parameters/scope_mode")) return { stdout: conf["/data/adb/pathmask/rule_mode.conf"] || "deny" };
+		if (!command.includes('export PATHMASK_RULE_MODE_REQUEST="$mode"')) return undefined;
+		if (!accept) return { errno: 32, stderr: "RULE_MODE_UNCONFIRMED" };
+		conf["/data/adb/pathmask/rule_mode.conf"] = "global";
+		conf["/data/adb/pathmask/boot_state"] = "state=loaded\nrule_mode=global\n";
+		return { stdout: "PATHMASK_RULE_MODE_OK global\n" };
+	} } }));
+	try {
+		page.$('#homePanel input[value="global"]').click();
+		page.$("#applyRuleModeBtn").click();
+		await waitFor(page, () => page.$("#toast").textContent.includes("未能确认模式切换"), "missing receipt shown");
+		assertEqual(conf["/data/adb/pathmask/rule_mode.conf"], undefined, "failed apply leaves previous selection");
+		accept = true;
+		page.$("#applyRuleModeBtn").click();
+		await waitFor(page, () => page.$("#ruleModeStatus").textContent.includes("已保存模式：全局"), "receipt updates home");
+		const change = page.stub.calls.find(command => command.includes("PATHMASK_RULE_MODE_REQUEST"));
+		assert(change.indexOf("grep -Fxq") < change.indexOf('mv "$stage"'), "receipt gates replacing the saved mode");
+		assertEqual(page.$("#scopeState").textContent, "全局", "dashboard follows the applied mode");
+	} finally { await settle(page); page.close(); }
+});
+
+test("same-mode reload reports unconfirmed when startup skips loading", async () => {
+	const root = "/data/adb/pathmask/";
+	let loaded = true;
+	const conf = { [root + "rule_mode.conf"]: "global", [root + "boot_state"]: "state=loaded\nrule_mode=global" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("PATHMASK_REQUIRE_RELOAD_RECEIPT=1")) {
+			loaded = false;
+			conf[root + "boot_state"] = "state=skipped-targets-missing\nrule_mode=global";
+			return { stdout: "" };
+		}
+		if (command.includes("/parameters/scope_mode")) return { stdout: loaded ? "global" : "" };
+		if (!loaded && (command.includes("grep '^pathmask '") || command.includes("cat /proc/modules"))) return { stdout: "" };
+	} } }));
+	try {
+		page.$("#dock-apps").click();
+		page.$("#reloadBtn").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent.includes("未确认生效"), "unconfirmed reload");
+		assertEqual(page.$("#moduleState").textContent, "未加载", "module remains inactive");
+	} finally { await settle(page); page.close(); }
+});
+
+test("hot reload without a saved mode keeps the legacy loader", async () => {
+	const root = "/data/adb/pathmask/";
+	const conf = { [root + "scope_mode.conf"]: "global" };
+	const page = await bootReady(await bootPage({ stub: { conf } }));
+	try {
+		page.$("#dock-apps").click();
+		assert(page.$("#configPanel").classList.contains("active"), "legacy global opens the shared editor");
+		page.$("#reloadBtn").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent.includes("热重载完成"), "plain reload");
+		assert(!page.stub.calls.some(command => command.includes("PATHMASK_RULE_MODE_REQUEST")), "no implicit mode trial");
+		assertEqual(conf[root + "rule_mode.conf"], undefined, "mode stays unsaved");
+	} finally { await settle(page); page.close(); }
+});
+
+test("reload waiting on Scene's late mount is confirmed, not failed", async () => {
+	const root = "/data/adb/pathmask/";
+	let loaded = true;
+	const conf = { [root + "rule_mode.conf"]: "global", [root + "auto_scene_debugfs.conf"]: "1",
+		[root + "boot_state"]: "state=loaded\nrule_mode=global" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("PATHMASK_REQUIRE_RELOAD_RECEIPT=1")) {
+			loaded = false;
+			conf[root + "boot_state"] = "state=skipped-targets-missing\nrule_mode=global";
+			conf[root + "scene_debugfs_state"] = "status=late-watching\napplied=0";
+			return { stdout: "PATHMASK_RELOAD_OK scene-pending\n" };
+		}
+		if (command.includes("/parameters/scope_mode")) return { stdout: loaded ? "global" : "" };
+		if (!loaded && (command.includes("grep '^pathmask '") || command.includes("cat /proc/modules"))) return { stdout: "" };
+	} } }));
+	try {
+		page.$("#dock-apps").click();
+		page.$("#reloadBtn").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent.includes("后台继续等待 Scene"), "pending Scene toast");
+	} finally { await settle(page); page.close(); }
+});
+
+test("companion activation does not reload an empty blacklist", async () => {
+	const root = "/data/adb/pathmask/";
+	let companion = false;
+	const conf = { [root + "rule_mode.conf"]: "deny", [root + "boot_state"]: "state=skipped-empty-targets\nrule_mode=deny" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("--apply-procguard")) {
+			assert(!command.includes("rmmod pathmask"), "companion request does not unload PathMask");
+			companion = true;
+			return { stdout: "PATHMASK_PROCGUARD_OK enabled\n" };
+		}
+		if (command.endsWith(" > '/data/adb/pathmask/procguard.conf'")) { conf[root + "procguard.conf"] = "1"; return { stdout: "" }; }
+		if (command.includes("grep '^procguard '")) return { stdout: companion ? "procguard 4096 0 - Live" : "" };
+		if (command.includes("grep '^pathmask '") || command.includes("cat /proc/modules")) return { stdout: "" };
+	} } }));
+	try {
+		page.$("#dock-settings").click(); page.$("#tab-procguard").click();
+		page.$("#procguardEnableInput").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent.includes("隔离防护已启用"), "companion receipt");
+		assert(companion && page.$("#procguardStats").textContent.includes("已加载"), "the companion is active");
+		assertEqual(page.$("#moduleState").textContent, "未加载", "empty PathMask is not reloaded");
+	} finally { await settle(page); page.close(); }
+});
+
+test("whitelist diagnostics and rows honor the active UID set", async () => {
+	const root = "/data/adb/pathmask/";
+	const conf = { [root + "scope_mode.conf"]: "deny", [root + "rule_mode.conf"]: "allow", [root + "boot_state"]: "state=loaded\nrule_mode=allow" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("--- basic ---")) return { stdout: resolveCommand(command)
+			.replace("scope_mode=deny", "scope_mode=allow").replace("deny_uids=10123,10124,10125", "deny_uids=0,1000,2000") };
+		if (command.includes("/parameters/scope_mode")) return { stdout: "allow" };
+		if (command.includes("/parameters/deny_uids")) return { stdout: "0,1000,2000" };
+	} } }));
+	try {
+		assert(!page.pm().lastSnapshot.facts.stale.scope && !page.pm().lastSnapshot.facts.stale.denyUids, "a dormant config is not a stale running scope");
+		page.$("#dock-apps").click();
+		await waitFor(page, () => page.$$(".allowAppRow").length === 3, "manual whitelist");
+		page.$("#showSystemInput").click();
+		await waitFor(page, () => page.$$(".allowAppRow").length === 5, "system rows");
+		const row = page.$$(".allowAppRow").find(r => r.textContent.includes("com.android.settings"));
+		assert(!row.querySelector('[role="switch"]').checked, "system app is not manually selected");
+		assertEqual(row.querySelector(".runtimeExemption").textContent, "共享路径：运行中已豁免", "actual UID state is displayed");
+	} finally { await settle(page); page.close(); }
+});
+
+test("blacklist diagnosis uses stored profiles instead of dormant shared paths", async () => {
+	const root = "/data/adb/pathmask/";
+	const conf = { [root + "rule_mode.conf"]: "deny", [root + "target_path.conf"]: "dormant invalid path", [root + "boot_state"]: "state=loaded\nrule_mode=deny" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("/parameters/app_profiles")) return { stdout: "12345 1" };
+		if (command.includes("--check-app-profiles")) return { stdout: "" };
+	} } }));
+	try {
+		assertEqual(page.pm().lastSnapshot.facts.confTargetCount, 0, "dormant paths not counted");
+		assertEqual(page.pm().lastSnapshot.facts.appPathCount, 1, "path count comes from the kernel receipt");
+		page.$('#homePanel input[value="global"]').click();
+		page.$("#dock-settings").click(); page.$("#tab-diagnosis").click(); page.$("#validateConfigBtn").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent === "配置校验通过", "stored profile validation");
+		assert(page.stub.calls.some(c => c.includes("--check-app-profiles '/data/adb/pathmask/app_profiles.conf'")), "saved mode wins over preview");
+	} finally { await settle(page); page.close(); }
+});
+
 test("the glass Dock reuses production pages and keeps the current settings subpage", async () => {
 	const fullscreen = [];
 	const page = await bootReady(await bootPage({ fullScreen: value => fullscreen.push(value) }));
@@ -364,59 +544,19 @@ test("the installed app directory keeps per-app drafts isolated and never applie
 	}
 });
 
-test("V2 backup restore keeps legacy and existing drafts unchanged", async () => {
+test("blacklist omits backup and upgrade controls while keeping legacy settings", async () => {
 	const page = await bootReady(await bootPage());
 	try {
-		const oldPaths = () => page.$$("#pathList .pathRowPath").map(field => field.value).join("\n");
-		const oldScope = () => page.$('input[name="scope"]:checked').value;
-		const before = [oldPaths(), oldScope()].join("\n");
+		const before = page.$$("#pathList .pathRowPath").map(field => field.value).join("\n");
 		page.$("#dock-apps").click();
-		await waitFor(page, () => page.$$(".directoryRow").length >= 2, "app directory");
-		const shellCalls = page.stub.calls.length;
-		page.$(".directoryCompatibility").open = true;
-		page.$("#previewLegacyMigrationBtn").click();
-		const report = page.$("#legacyMigrationPreview").textContent;
-		assert(report.includes("旧版模式：黑名单") && report.includes("只读预览") && report.includes("直接 UID"), "preview describes but does not change legacy mode");
-		const codec = page.window.PathMaskProfileDrafts;
-		for (const scope of ["allow", "global"]) assertEqual(codec.inspectLegacy({ scopeText: scope }).mode, scope, "does not coerce legacy modes");
-		assertEqual(codec.inspectLegacy({ scopeText: "future" }).mode, "unknown", "unknown legacy mode stays unknown");
-		const keys = page.$$(".directoryRow").slice(0, 2).map(el => el.dataset.directoryKey);
-		const open = key => page.$$(".directoryRow").find(el => el.dataset.directoryKey === key).click();
-		const addPath = path => {
-			page.$("#draftPathInput").value = path;
-			page.$("#draftPathForm").dispatchEvent(new page.window.Event("submit", { bubbles: true, cancelable: true }));
-		};
-		const first = "/data/local/tmp/saved-draft.txt", second = "/data/local/tmp/unsaved-draft.txt";
-		open(keys[0]); addPath(first); page.$("#saveAppDraftBtn").click(); page.$("#directoryBackBtn").click();
-		open(keys[1]); addPath(second); page.$("#directoryBackBtn").click();
-		const exportBackup = () => { page.$("#exportAppDraftsBtn").click(); return JSON.parse(page.$("#appDraftBackupOutput").value); };
-		const saved = exportBackup();
-		assertEqual(saved.format, "pathmask-profile-drafts", "backup is a draft-only format");
-		assertEqual(saved.schemaVersion, 2, "expected schema version");
-		assertEqual(saved.profiles.length, 1, "unsaved drafts are not exported");
-		const source = page.$("#appDraftBackupInput");
-		const restore = json => { source.value = JSON.stringify(json); page.$("#importAppDraftsBtn").click(); };
-		const status = () => page.$("#appDraftBackupStatus").textContent;
-		const otherUser = { ...saved.profiles[0], userId: 10, paths: ["/data/local/tmp/restored-draft.txt"] };
-		restore({ ...saved, schemaVersion: 3, profiles: [otherUser] });
-		assert(status().includes("不支持") && JSON.parse(source.value).schemaVersion === 3, "future version leaves input intact");
-		assertEqual(exportBackup().profiles.length, 1, "unsupported version did not merge");
-		restore({ ...saved, profiles: [otherUser, { ...otherUser, userId: 11, paths: ["/"] }] });
-		assert(status().includes("格式不正确"), "invalid paths reject mixed backup");
-		assertEqual(exportBackup().profiles.length, 1, "invalid later row also rejects valid first row");
-		restore({ ...saved, profiles: [otherUser, otherUser] });
-		assert(status().includes("格式不正确"), "duplicate app keys reject backup");
-		const unsavedConflict = { ...saved.profiles[0], packageName: keys[1].split(":")[1], paths: [] };
-		restore({ ...saved, profiles: [{ ...saved.profiles[0], paths: [] }, unsavedConflict, otherUser] });
-		assert(status().includes("已导入 1 个草稿，保留 2 个现有草稿") && status().includes("均未应用"), "valid backup skips conflicts");
-		assertEqual(exportBackup().profiles.length, 2, "same package for a different Android user is a distinct draft");
-		open(keys[0]); assertEqual(page.$("#draftPathList code").textContent, first, "saved draft remains");
-		page.$("#directoryBackBtn").click();
-		open(keys[1]); assertEqual(page.$("#draftPathList code").textContent, second, "in-flight edits remain");
-		page.$("#directoryBackBtn").click();
+		await waitFor(page, () => page.$$(".directoryRow").length >= 2, "app directory without backup panel");
+		assert(!page.$('#appsPanel .directoryCompatibility, #previewLegacyMigrationBtn, #importAppDraftsBtn, #exportAppDraftsBtn'),
+			"blacklist does not mount any backup or upgrade controls");
+		assert(page.$("#directorySearch") && page.$("#applyProfilesBtn"), "search and applying drafts remain available");
+		page.$("#dock-settings").click();
 		page.$("#openLegacyRulesBtn").click();
-		assertEqual([oldPaths(), oldScope()].join("\n"), before, "legacy paths and mode remain unchanged");
-		assertEqual(page.stub.calls.length, shellCalls, "none of the draft compatibility controls issued a device command");
+		assert(page.$("#configPanel").classList.contains("active"), "legacy rules remain in Settings");
+		assertEqual(page.$$("#pathList .pathRowPath").map(field => field.value).join("\n"), before, "saved legacy paths remain intact");
 	} finally {
 		await settle(page);
 		page.close();
@@ -439,6 +579,7 @@ test("missing draft assets leave the legacy editor reachable", async () => {
 
 function profileBridge({ initial = null, noReceipt = false } = {}) {
 	return {
+		conf: { "/data/adb/pathmask/rule_mode.conf": "deny" },
 		respond(command) {
 			if (command.includes("profile_snapshot || exit 22")) {
 				return { stdout: initial === null ? "missing\n" : "a".repeat(64) + "\n" + Buffer.from(initial).toString("base64") };
@@ -512,12 +653,13 @@ test("profile codec rejects ambiguous and overlong paths", async () => {
 		const codec = page.window.PathMaskProfileDrafts;
 		for (const path of ["/fixture/with,comma", "/fixture/with;semicolon", "/" + "测".repeat(85)]) {
 			assert(!codec.validPath(path), "bad path rejected");
-			const input = JSON.stringify({ format: "pathmask-profile-drafts", schemaVersion: 2,
-				profiles: [{ packageName: "com.example.fixture", userId: 0, enabled: true, filterDirectory: false, paths: [path] }] });
-			assert(codec.decodeBackup(input).error === "invalid", "bad backup rejected");
+			const profile = "app 0 com.example.fixture 1 0\npath " + path + "\n";
+			assert(codec.decodeRules(profile) === null, "invalid path in stored rule rejected");
 		}
 		assert(codec.validPath("/" + "a".repeat(254)), "255 bytes accepted");
 		assert(codec.decodeRules("path /fixture") === null, "orphan path is not an empty config");
+		const profiles = codec.decodeRules("app 0 com.example.fixture 1 0\npath /fixture/owner\napp 10 com.example.fixture 0 1\npath /fixture/work\n");
+		assert(profiles?.has("0:com.example.fixture") && profiles.has("10:com.example.fixture"), "Android users remain distinct");
 	} finally { await settle(page); page.close(); }
 });
 
