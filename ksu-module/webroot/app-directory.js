@@ -36,10 +36,10 @@
 	const equal = (a, b) => a.enabled === b.enabled && a.filterDirectory === b.filterDirectory
 		&& a.paths.length === b.paths.length && a.paths.every((path, i) => path === b.paths[i]);
 
-	function mount({ t, readApps, matches, navigate, getLegacySnapshot, readProfiles, applyProfiles }) {
+	function mount({ t, readApps, matches, navigate, readProfiles, applyProfiles, canApplyProfiles }) {
 		const by = id => document.getElementById(id);
 		const codec = window.PathMaskProfileDrafts;
-		if (!codec?.decodeRules || !by("appDraftBackupInput") || !by("applyProfilesBtn")) return null;
+		if (!codec?.decodeRules || !by("directoryList") || !by("applyProfilesBtn")) return null;
 		const draftKey = codec.appKey;
 		const list = by("directoryList"), status = by("directoryStatus"), search = by("directorySearch");
 		const includeSystem = by("directorySystemInput"), more = by("directoryMoreBtn");
@@ -61,7 +61,9 @@
 		const lastSaved = key => saved.get(key) ?? fromDisk(key);
 
 		function updateApplyButton() {
-			applyButton.disabled = applying || !stored || !saved.size;
+			const modeReady = canApplyProfiles();
+			by("profileModeNotice").hidden = modeReady;
+			applyButton.disabled = applying || !modeReady || !stored || !saved.size;
 		}
 
 		function disarm() {
@@ -121,7 +123,6 @@
 				updateApplyButton();
 			}
 		}
-		let previewRequested = false, backupStatus = null;
 		const uidText = app => "UID " + (app.uid || t("未知"));
 		const draft = () => editing.get(selectedKey);
 
@@ -189,84 +190,6 @@
 			renderList();
 		}
 
-		function renderLegacyPreview() {
-			if (!previewRequested) return;
-			const output = by("legacyMigrationPreview");
-			const result = codec.inspectLegacy(getLegacySnapshot());
-			output.hidden = false;
-			if (result.mode === "unknown") {
-				output.textContent = t("尚未读到明确的旧版模式。请刷新页面配置后再检查。");
-				return;
-			}
-			const mode = result.mode === "deny" ? t("黑名单") : result.mode === "allow" ? t("白名单") : t("全局");
-			const notes = [t("旧版模式：{0}。路径条目：{1}。", [mode, result.paths])];
-			if (result.mode !== "global") notes.push(t("包名条目：{0}；直接 UID 条目：{1}。", [result.packages, result.uids]));
-			if (result.mode !== "deny") notes.push(t("白名单或全局模式不能通过枚举已安装应用等价转换。"));
-			if (result.nonLiteralPaths) notes.push(t("有 {0} 条路径不是普通绝对路径，需要单独核对。", [result.nonLiteralPaths]));
-			if (result.uids) notes.push(t("直接 UID 不能当作应用的持久标识。"));
-			notes.push(t("只读预览：未转换任何条目，旧版配置保持原样。"));
-			output.textContent = notes.join("\n");
-		}
-
-		function renderBackupStatus() {
-			const status = by("appDraftBackupStatus");
-			if (!backupStatus) { status.textContent = ""; return; }
-			if (backupStatus.error === "size") status.textContent = t("草稿备份超过大小限制，现有草稿未更改。");
-			else if (backupStatus.error === "version") status.textContent = t("不支持此草稿备份版本。已保留输入，没有导入任何内容。");
-			else if (backupStatus.error) status.textContent = t("草稿备份格式不正确，现有草稿未更改。");
-			else if (backupStatus.exported !== undefined) status.textContent = t("已生成 {0} 个草稿的备份。请复制保存。", [backupStatus.exported]);
-			else status.textContent = t("已导入 {0} 个草稿，保留 {1} 个现有草稿。均未应用。", [backupStatus.added, backupStatus.kept]);
-		}
-
-		function exportDrafts() {
-			const result = codec.encodeBackup(saved);
-			if (result.error) backupStatus = { error: result.error };
-			else {
-				const output = by("appDraftBackupOutput");
-				output.value = result.text;
-				by("appDraftBackupOutputLabel").hidden = output.hidden = false;
-				backupStatus = { exported: saved.size };
-				output.focus();
-				output.select();
-			}
-			renderBackupStatus();
-		}
-
-		function importDrafts() {
-			const input = by("appDraftBackupInput");
-			const decoded = codec.decodeBackup(input.value);
-			if (decoded.error) {
-				backupStatus = { error: decoded.error };
-				input.setAttribute("aria-invalid", "true");
-				input.focus();
-				renderBackupStatus();
-				return;
-			}
-			const next = new Map(saved);
-			const added = [];
-			let kept = 0;
-			for (const [key, value] of decoded.profiles) {
-				if (hasDraft(key) || stored?.has(key)) kept++;
-				else { next.set(key, value); added.push(key); }
-			}
-			// Admission also checks the merged result, so everything we import is exportable.
-			const check = codec.encodeBackup(next);
-			if (check.error) backupStatus = { error: check.error };
-			else {
-				for (const key of added) {
-					const value = next.get(key);
-					saved.set(key, copyDraft(value));
-					if (editing.has(key)) editing.set(key, copyDraft(value));
-				}
-				disarm();
-				backupStatus = { added: added.length, kept };
-				input.removeAttribute("aria-invalid");
-				renderList();
-				if (current) paintDetail();
-			}
-			renderBackupStatus();
-		}
-
 		function updatePathError() {
 			input.setAttribute("aria-invalid", String(!!pathError));
 			errorNode.hidden = !pathError;
@@ -330,17 +253,12 @@
 			appName.focus({ preventScroll: true });
 		}
 
-		by("previewLegacyMigrationBtn").addEventListener("click", () => { previewRequested = true; renderLegacyPreview(); });
-		by("exportAppDraftsBtn").addEventListener("click", exportDrafts);
-		by("importAppDraftsBtn").addEventListener("click", importDrafts);
-		by("appDraftBackupInput").addEventListener("input", event => event.target.removeAttribute("aria-invalid"));
 		by("directoryBackBtn").addEventListener("click", () => {
 			navigate("apps");
 			const prev = [...list.querySelectorAll("button")].find(button => button.dataset.directoryKey === selectedKey);
 			(prev || search).focus({ preventScroll: true });
 			document.scrollingElement?.scrollTo?.(0, previousScroll);
 		});
-		by("openLegacyRulesBtn").addEventListener("click", () => navigate("config"));
 		applyButton.addEventListener("click", () => {
 			if (applyButton.disabled) return;
 			// Applying changes what the module does, so the first click only
@@ -355,7 +273,6 @@
 			disarm();
 			void applySavedDrafts();
 		});
-		by("legacyBackBtn").addEventListener("click", () => navigate("apps"));
 		search.addEventListener("input", () => { limit = pageSize; renderList(); });
 		includeSystem.addEventListener("change", refresh);
 		by("refreshDirectoryBtn").addEventListener("click", refresh);
@@ -400,9 +317,9 @@
 		updateApplyButton();
 		return {
 			showList() { if (state === "idle") void refresh(); else renderList(); },
-			refreshText() { renderList(); renderLegacyPreview(); renderBackupStatus(); if (current) paintDetail(); },
+			refreshText() { renderList(); if (current) paintDetail(); },
 		};
 	}
 
-	window.PathMaskAppDirectory = { mount };
+	window.PathMaskAppDirectory = { mount, setIcon };
 })();

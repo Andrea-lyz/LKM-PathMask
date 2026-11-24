@@ -47,6 +47,7 @@ WRITE_OP_POLICY_CONFIG="$PERSIST_DIR/write_op_policy.conf"
 AUTO_SCENE_DEBUGFS_CONFIG="$PERSIST_DIR/auto_scene_debugfs.conf"
 PROC_GUARD_CONFIG="$PERSIST_DIR/procguard.conf"
 APP_PROFILES_CONFIG="$PERSIST_DIR/app_profiles.conf"
+RULE_MODE_CONFIG="$PERSIST_DIR/rule_mode.conf"
 SCENE_DEBUGFS_PATHS_PATH="$PERSIST_DIR/scene_debugfs_paths"
 SCENE_DEBUGFS_STATE_PATH="$PERSIST_DIR/scene_debugfs_state"
 SCENE_WATCH_STOP_PATH="$PERSIST_DIR/scene_debugfs_watch.stop"
@@ -68,6 +69,8 @@ SCENE_DEBUGFS_COUNT=0
 SCENE_DEBUGFS_STATUS=disabled
 SCENE_PACKAGE_STATUS=unknown
 UNRESOLVED_PACKAGES=0
+RULE_MODE=""
+RULE_MODE_REQUEST=${PATHMASK_RULE_MODE_REQUEST:-}
 
 read_load_failure_count() {
 	COUNT=0
@@ -136,6 +139,7 @@ write_boot_state() {
 		printf 'updated=%s\n' "$(date +%s 2>/dev/null || echo 0)"
 		[ -n "$DEADLINE" ] && printf 'deadline=%s\n' "$DEADLINE"
 		[ -n "$DETAIL" ] && printf 'detail=%s\n' "$DETAIL"
+		[ -n "$RULE_MODE" ] && printf 'rule_mode=%s\n' "$RULE_MODE"
 	} > "$BOOT_STATE_PATH" 2>/dev/null || true
 }
 
@@ -835,7 +839,7 @@ profile_compile() {
 profile_fail() {
 	log_e "app profiles: $PROFILE_FAILURE"
 	write_boot_state "failed-app-profiles" "$PROFILE_FAILURE" ""
-	if [ -n "$PROFILE_REQUEST" ]; then
+	if [ -n "$PROFILE_REQUEST$RULE_MODE_REQUEST" ]; then
 		printf 'app profiles: %s\n' "$PROFILE_FAILURE" >&2
 	fi
 }
@@ -843,6 +847,12 @@ profile_fail() {
 profile_ack() {
 	if [ -n "$PROFILE_REQUEST" ]; then
 		printf 'PATHMASK_APP_PROFILES_OK %s %s\n' "$PROFILE_REQUEST" "$APP_PROFILE_COUNT"
+	fi
+}
+
+rule_mode_ack() {
+	if [ -n "$RULE_MODE_REQUEST" ]; then
+		printf 'PATHMASK_RULE_MODE_OK %s\n' "$RULE_MODE"
 	fi
 }
 
@@ -860,6 +870,14 @@ skip_without_targets() {
 			exit 1
 		fi
 		profile_ack
+	fi
+	if [ -n "$RULE_MODE_REQUEST" ]; then
+		# An empty per-app list is valid, unlike a skipped shared ruleset.
+		if [ "$RULE_MODE" != deny ] || grep -q '^pathmask ' /proc/modules; then
+			printf '%s\n' "$2" >&2
+			exit 1
+		fi
+		rule_mode_ack
 	fi
 	exit 0
 }
@@ -1288,7 +1306,26 @@ if should_skip_after_load_failures; then
 	exit 0
 fi
 
-if [ -f "$AUTO_SCENE_DEBUGFS_CONFIG" ]; then
+# With no explicit selection, upgrades retain their existing behavior.
+if [ -n "$RULE_MODE_REQUEST" ]; then
+	RULE_MODE="$RULE_MODE_REQUEST"
+elif [ -e "$RULE_MODE_CONFIG" ] || [ -L "$RULE_MODE_CONFIG" ]; then
+	if [ ! -f "$RULE_MODE_CONFIG" ] || [ -L "$RULE_MODE_CONFIG" ] ||
+	   ! RULE_MODE=$(cat "$RULE_MODE_CONFIG") || [ -z "$RULE_MODE" ]; then
+		write_boot_state "failed-rule-mode" "cannot read selected rule mode" ""
+		exit 1
+	fi
+fi
+case "$RULE_MODE" in
+	''|global|deny|allow) ;;
+	*) RULE_MODE=""; write_boot_state "failed-rule-mode" "invalid rule mode" ""; exit 1 ;;
+esac
+if [ -n "$PROFILE_REQUEST" ] && { [ "$RULE_MODE" = global ] || [ "$RULE_MODE" = allow ]; }; then
+	printf 'per-app rules are inactive in %s mode\n' "$RULE_MODE" >&2
+	exit 1
+fi
+
+if [ "$RULE_MODE" != deny ] && [ -f "$AUTO_SCENE_DEBUGFS_CONFIG" ]; then
 	AUTO_SCENE_DEBUGFS="$(head -n 1 "$AUTO_SCENE_DEBUGFS_CONFIG" | tr -d '\r ')"
 fi
 case "$AUTO_SCENE_DEBUGFS" in
@@ -1307,7 +1344,7 @@ else
 	write_scene_debugfs_state "disabled" "0" ""
 fi
 
-if [ -f "$CONFIG_PATH" ]; then
+if [ "$RULE_MODE" != deny ] && [ -f "$CONFIG_PATH" ]; then
 	while IFS= read -r CONFIG_LINE || [ -n "$CONFIG_LINE" ]; do
 		CONFIG_LINE="$(printf '%s' "$CONFIG_LINE" | tr -d '\r')"
 		case "$CONFIG_LINE" in
@@ -1328,6 +1365,9 @@ fi
 
 if [ -f "$SCOPE_MODE_CONFIG" ]; then
 	SCOPE_MODE="$(head -n 1 "$SCOPE_MODE_CONFIG" | tr -d '\r ')"
+fi
+if [ -n "$RULE_MODE" ]; then
+	SCOPE_MODE="$RULE_MODE"
 fi
 
 if [ -f "$WAIT_SECONDS_CONFIG" ]; then
@@ -1455,14 +1495,17 @@ if [ -n "$PROFILE_REQUEST" ]; then
 		*) exit 2 ;;
 	esac
 fi
-if ! profile_compile "$PROFILE_SOURCE" 0; then
-	PROFILE_FAILURE="$APP_PROFILE_ERROR"
-	profile_fail
-	if [ -n "$PROFILE_REQUEST" ]; then
-		exit 1
+# Shared-path modes never read the dormant app profile file.
+if [ -z "$RULE_MODE" ] || [ "$RULE_MODE" = deny ]; then
+	if ! profile_compile "$PROFILE_SOURCE" 0; then
+		PROFILE_FAILURE="$APP_PROFILE_ERROR"
+		profile_fail
+		if [ -n "$PROFILE_REQUEST" ] || [ -n "$RULE_MODE_REQUEST" ]; then
+			exit 1
+		fi
+	elif [ "$APP_PROFILE_COUNT" -gt 0 ]; then
+		PROFILE_MODE=1
 	fi
-elif [ "$APP_PROFILE_COUNT" -gt 0 ]; then
-	PROFILE_MODE=1
 fi
 
 if [ -z "$TARGET_RAW_LINES" ] && [ "$AUTO_SCENE_DEBUGFS" = "0" ] && [ "$PROFILE_MODE" = "0" ]; then
@@ -1471,7 +1514,7 @@ fi
 
 WAIT_DEADLINE=$(( $(date +%s 2>/dev/null || echo 0) + WAIT_SECONDS ))
 
-if ! wait_for_targets "$WAIT_DEADLINE"; then
+if [ "$RULE_MODE" != deny ] && ! wait_for_targets "$WAIT_DEADLINE"; then
 	if [ "$PROFILE_MODE" = "0" ]; then
 		log_i "no configured targets exist, skip loading"
 		start_scene_debugfs_watcher "0"
@@ -1480,7 +1523,10 @@ if ! wait_for_targets "$WAIT_DEADLINE"; then
 	log_i "no legacy targets; continuing for per-app rules only"
 fi
 
-if [ "$SCOPE_MODE" = "deny" ] || [ "$SCOPE_MODE" = "allow" ]; then
+if [ "$RULE_MODE" = deny ]; then
+	# Only per-app profiles participate in the selected blacklist.
+	DENY_UIDS=""
+elif [ "$SCOPE_MODE" = "deny" ] || [ "$SCOPE_MODE" = "allow" ]; then
 	wait_for_scope_packages "$WAIT_DEADLINE"
 	if ! pm_legacy_scope_resolved "$SCOPE_MODE" "$DENY_UIDS"; then
 		log_i "legacy $SCOPE_MODE has no resolved UIDs; legacy paths disabled"
@@ -1488,7 +1534,7 @@ if [ "$SCOPE_MODE" = "deny" ] || [ "$SCOPE_MODE" = "allow" ]; then
 			skip_without_targets "skipped-no-uids" "$SCOPE_MODE mode without resolved UIDs"
 		fi
 	fi
-else
+elif [ -z "$RULE_MODE" ]; then
 	read_deny_uid_config
 	read_deny_package_config 0
 fi
@@ -1497,14 +1543,14 @@ if grep -q '^pathmask ' /proc/modules 2>/dev/null; then
 	reset_load_failure_guard
 	log_i "pathmask is already loaded"
 	write_boot_state "already-loaded" "" ""
-	[ -z "$PROFILE_REQUEST" ] || exit 1
+	[ -z "$PROFILE_REQUEST$RULE_MODE_REQUEST" ] || exit 1
 	exit 0
 fi
 
 if grep -q '^nohello ' /proc/modules 2>/dev/null; then
 	log_i "legacy nohello module is loaded; unload it before loading pathmask"
 	write_boot_state "skipped-legacy-loaded" "legacy nohello in /proc/modules" ""
-	[ -z "$PROFILE_REQUEST" ] || exit 1
+	[ -z "$PROFILE_REQUEST$RULE_MODE_REQUEST" ] || exit 1
 	exit 0
 fi
 
@@ -1556,6 +1602,7 @@ if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" s
 	fi
 	write_boot_state "loaded" "$TARGET_PATHS" ""
 	profile_ack
+	rule_mode_ack
 	if [ "$AUTO_SCENE_DEBUGFS" = "1" ]; then
 		write_scene_debugfs_state "$SCENE_DEBUGFS_STATUS" "1" "discovered $SCENE_DEBUGFS_COUNT matching mount(s)"
 		start_scene_debugfs_watcher "1"

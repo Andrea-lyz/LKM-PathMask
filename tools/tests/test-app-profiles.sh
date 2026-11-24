@@ -128,3 +128,93 @@ if pm_apply_app_profiles 123; then exit 1; fi
 MODE=confirm
 pm_apply_app_profiles 123
 printf '  ok acknowledgment must match generation and path count\n'
+
+# Exercise the actual service routes with no device access and a fake insmod.
+# Keep fixed kernel paths out of the test copy and verify the emitted arguments.
+BOOT="$WORK/boot"
+mkdir "$BOOT" "$BOOT/bin" "$BOOT/module"
+: > "$BOOT/modules"
+: > "$BOOT/module/pathmask.ko"
+sed -e "s|^PERSIST_DIR=.*|PERSIST_DIR=\"$BOOT/config\"|" \
+	-e "s|^LEGACY_PERSIST_DIR=.*|LEGACY_PERSIST_DIR=\"$BOOT/unused\"|" \
+	-e "s|/proc/modules|$BOOT/modules|g" \
+	"$ROOT/ksu-module/service.sh" > "$BOOT/module/service.sh"
+cp "$ROOT/ksu-module/app-profiles.sh" "$BOOT/module/app-profiles.sh"
+# The compiler above is covered end-to-end; don't touch real kernel parameters.
+cat >> "$BOOT/module/app-profiles.sh" <<'SH'
+
+pm_apply_app_profiles() { cp "$APP_PROFILE_RULES" "$TEST_BOOT/committed"; }
+SH
+cat > "$BOOT/bin/insmod" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@" > "$TEST_BOOT/insmod-args"
+SH
+cat > "$BOOT/bin/cmd" <<'SH'
+#!/bin/sh
+[ "$1 $2 $3" = 'package list packages' ] || exit 1
+printf '%s\n' 'package:com.example.notes uid:10123'
+SH
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$BOOT/bin/log"
+chmod +x "$BOOT/bin/insmod" "$BOOT/bin/log" "$BOOT/bin/cmd"
+export TEST_BOOT="$BOOT"
+export PATH="$BOOT/bin:$PATH"
+mkdir "$BOOT/config"
+SHARED="$BOOT/shared"
+APP_PATH="$BOOT/own"
+: > "$SHARED"
+: > "$APP_PATH"
+printf '%s\n' "$SHARED" > "$BOOT/config/target_path.conf"
+printf '%s\n' deny > "$BOOT/config/scope_mode.conf"
+printf '%s\n' 10199 > "$BOOT/config/deny_uids.conf"
+printf '%s\n' 10211 > "$BOOT/config/allow_uids.conf"
+printf '%s\n' 'app 0 com.example.notes 1 0' "path $APP_PATH" > "$BOOT/config/app_profiles.conf"
+
+boot_rules() {
+	rm -f "$BOOT/insmod-args" "$BOOT/committed"
+	PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=0 PATHMASK_RULE_MODE_REQUEST="$1" \
+		sh "$BOOT/module/service.sh"
+}
+
+boot_rules ''
+grep -Fxq "target_paths=$SHARED" "$BOOT/insmod-args"
+grep -Fxq 'deny_uids=10199' "$BOOT/insmod-args"
+grep -Fxq "10123 0 $APP_PATH" "$BOOT/committed"
+[ ! -e "$BOOT/config/rule_mode.conf" ]
+printf '  ok an upgrade without an applied mode keeps legacy behavior\n'
+
+boot_rules deny > "$BOOT/output"
+grep -Fxq 'target_paths=' "$BOOT/insmod-args"
+grep -Fxq 'deny_uids=' "$BOOT/insmod-args"
+grep -Fxq 'profile_mode=1' "$BOOT/insmod-args"
+grep -Fxq "10123 0 $APP_PATH" "$BOOT/committed"
+grep -Fxq 'PATHMASK_RULE_MODE_OK deny' "$BOOT/output"
+printf '  ok selected blacklist uses only per-app rules\n'
+
+# Dormant, malformed profiles cannot prevent a shared-path mode from starting.
+printf '%s\n' 'invalid profile' > "$BOOT/config/app_profiles.conf"
+boot_rules global > "$BOOT/output"
+grep -Fxq "target_paths=$SHARED" "$BOOT/insmod-args"
+grep -Fxq 'scope_mode=global' "$BOOT/insmod-args"
+grep -Fxq 'profile_mode=0' "$BOOT/insmod-args"
+[ ! -e "$BOOT/committed" ]
+grep -Fxq 'PATHMASK_RULE_MODE_OK global' "$BOOT/output"
+printf '%s\n' allow > "$BOOT/config/rule_mode.conf"
+boot_rules ''
+grep -Fxq "target_paths=$SHARED" "$BOOT/insmod-args"
+grep -Fxq 'scope_mode=allow' "$BOOT/insmod-args"
+grep -Fxq 'deny_uids=0,1000,2000,10211' "$BOOT/insmod-args"
+[ ! -e "$BOOT/committed" ]
+printf '  ok global and saved whitelist use shared paths and not app profiles\n'
+
+: > "$BOOT/config/allow_uids.conf"
+: > "$BOOT/config/allow_system_uids.conf"
+if boot_rules allow > "$BOOT/output" 2>&1; then exit 1; fi
+[ ! -e "$BOOT/insmod-args" ]
+if grep -q PATHMASK_RULE_MODE_OK "$BOOT/output"; then exit 1; fi
+printf '  ok unresolved whitelist is not falsely acknowledged\n'
+
+: > "$BOOT/config/app_profiles.conf"
+boot_rules deny > "$BOOT/output"
+[ ! -e "$BOOT/insmod-args" ]
+grep -Fxq 'PATHMASK_RULE_MODE_OK deny' "$BOOT/output"
+printf '  ok empty blacklist starts no module, without enabling shared paths\n'

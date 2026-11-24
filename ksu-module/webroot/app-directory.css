@@ -5,6 +5,19 @@
 }
 
 .directoryBar { justify-content: space-between; flex-wrap: wrap; }
+.directoryBar[hidden], .directoryPanel[hidden] { display: none; }
+
+.appRow.allowAppRow {
+	margin: 0;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	justify-content: normal;
+	min-height: 4rem;
+	cursor: pointer;
+}
+
+.allowAppRow .pkgName { font: var(--md-sys-typescale-label-large); }
+.allowAppRow input { justify-self: end; }
+#applyRuleModeBtn { justify-self: start; }
 .directoryActions { justify-content: flex-end; flex-wrap: wrap; }
 .directoryIdentity { align-items: flex-start; }
 .directoryPanel { display: grid; gap: var(--space-2); min-width: 0; }
@@ -87,7 +100,4 @@ button.directoryRow {
 #draftPathInput { font: .875rem / 1.4 var(--font-mono); }
 #draftPathInput[aria-invalid="true"] { border-color: var(--md-sys-color-error); }
 #draftPathError[hidden] { display: none; }
-.directoryCompatibility .directoryPanel { margin-top: var(--space-2); }
-.directoryCompatibility .directoryPanel > button { justify-self: start; }
-.directoryMultiline { white-space: pre-wrap; }
 #appDraftBackupInput[aria-invalid="true"] { border-color: var(--md-sys-color-error); }
