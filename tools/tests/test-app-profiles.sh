@@ -248,6 +248,20 @@ if PATHMASK_REQUIRE_RELOAD_RECEIPT=1 boot_rules '' > "$BOOT/output" 2>&1; then e
 if grep -q 'PATHMASK_RELOAD_OK' "$BOOT/output"; then exit 1; fi
 printf '  ok shared-mode skip returns no successful reload receipt\n'
 
+# Scene's late mount is pending and the detached watcher owns the load.
+printf '%s\n' '#!/bin/sh' ': > "$TEST_BOOT/watcher-started"' > "$BOOT/module/scene-debugfs-watch.sh"
+printf '%s\n' 1 > "$BOOT/config/auto_scene_debugfs.conf"
+: > "$BOOT/config/target_path.conf"
+PATHMASK_REQUIRE_RELOAD_RECEIPT=1 boot_rules global > "$BOOT/output"
+[ ! -e "$BOOT/insmod-args" ]
+grep -Fxq 'PATHMASK_RELOAD_OK scene-pending' "$BOOT/output"
+grep -Fxq 'PATHMASK_RULE_MODE_OK global' "$BOOT/output"
+for _ in 1 2 3 4 5; do [ -e "$BOOT/watcher-started" ] && break; sleep 1; done
+[ -e "$BOOT/watcher-started" ]
+printf '%s\n' 0 > "$BOOT/config/auto_scene_debugfs.conf"
+printf '%s\n' "$BOOT/missing" > "$BOOT/config/target_path.conf"
+printf '  ok pending Scene mount is acknowledged once the watcher owns it\n'
+
 # Keep every operation on synthetic local inputs; no real watchers or modules.
 cat > "$BOOT/bin/rmmod" <<'SH'
 #!/bin/sh
@@ -267,13 +281,47 @@ sed -e "s|^PERSIST_DIR=.*|PERSIST_DIR=\"$BOOT/config\"|" -e "s|/proc/modules|$BO
 printf '%s\n' 'pathmask 4096 0 - Live' >> "$BOOT/modules"
 printf '%s\n' allow > "$BOOT/config/rule_mode.conf"
 printf '%s\n' 1 > "$BOOT/config/auto_scene_debugfs.conf"
-mkdir "$BOOT/config/.profile-apply-lock"
+LOCK="$BOOT/config/.profile-apply-lock"
+mkdir "$LOCK"
+printf '%s\n' "$$" > "$LOCK/pid"
 PATHMASK_RULE_MODE_REQUEST=allow PATHMASK_SCENE_WATCH_SECONDS=6 sh "$BOOT/module/scene-debugfs-watch.sh" &
 watcher=$!
-sleep 1
+sleep 3
 [ ! -e "$BOOT/unload-attempted" ]
 printf '%s\n' deny > "$BOOT/config/rule_mode.conf"
-rmdir "$BOOT/config/.profile-apply-lock"
+rm -f "$LOCK/pid"
+rmdir "$LOCK"
 wait "$watcher"
 [ ! -e "$BOOT/unload-attempted" ]
 printf '  ok watcher waits for the transaction and stops after blacklist commit\n'
+
+# A lock whose owner died must not block the watcher for its whole window.
+cat > "$BOOT/bin/rmmod" <<'SH'
+#!/bin/sh
+: > "$TEST_BOOT/unload-attempted"
+exit 0
+SH
+printf '%s\n' "$SHARED" > "$BOOT/config/target_path.conf"
+printf '%s\n' global > "$BOOT/config/rule_mode.conf"
+sh -c 'exit 0' &
+dead=$!
+wait "$dead"
+mkdir "$LOCK"
+printf '%s\n' "$dead" > "$LOCK/pid"
+PATHMASK_SCENE_WATCH_SECONDS=20 sh "$BOOT/module/scene-debugfs-watch.sh"
+[ -e "$BOOT/unload-attempted" ]
+[ ! -e "$LOCK" ]
+printf '  ok watcher reclaims a reload lock left by a dead owner\n'
+
+# A boot run cannot overlap a WebUI transaction; a surviving lock is stale.
+mkdir "$LOCK"
+printf '%s\n' "$$" > "$LOCK/pid"
+boot_rules '' > /dev/null 2>&1 || true
+[ ! -e "$LOCK" ]
+mkdir "$LOCK"
+printf '%s\n' "$$" > "$LOCK/pid"
+PATHMASK_REQUIRE_RELOAD_RECEIPT=1 boot_rules '' > /dev/null 2>&1 || true
+[ -e "$LOCK/pid" ]
+rm -f "$LOCK/pid"
+rmdir "$LOCK"
+printf '  ok boot clears a stale reload lock but WebUI reloads keep it\n'

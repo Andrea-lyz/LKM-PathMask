@@ -359,6 +359,42 @@ test("same-mode reload reports unconfirmed when startup skips loading", async ()
 	} finally { await settle(page); page.close(); }
 });
 
+test("hot reload without a saved mode keeps the legacy loader", async () => {
+	const root = "/data/adb/pathmask/";
+	const conf = { [root + "scope_mode.conf"]: "global" };
+	const page = await bootReady(await bootPage({ stub: { conf } }));
+	try {
+		page.$("#dock-apps").click();
+		assert(page.$("#configPanel").classList.contains("active"), "legacy global opens the shared editor");
+		page.$("#reloadBtn").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent.includes("热重载完成"), "plain reload");
+		assert(!page.stub.calls.some(command => command.includes("PATHMASK_RULE_MODE_REQUEST")), "no implicit mode trial");
+		assertEqual(conf[root + "rule_mode.conf"], undefined, "mode stays unsaved");
+	} finally { await settle(page); page.close(); }
+});
+
+test("reload waiting on Scene's late mount is confirmed, not failed", async () => {
+	const root = "/data/adb/pathmask/";
+	let loaded = true;
+	const conf = { [root + "rule_mode.conf"]: "global", [root + "auto_scene_debugfs.conf"]: "1",
+		[root + "boot_state"]: "state=loaded\nrule_mode=global" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("PATHMASK_REQUIRE_RELOAD_RECEIPT=1")) {
+			loaded = false;
+			conf[root + "boot_state"] = "state=skipped-targets-missing\nrule_mode=global";
+			conf[root + "scene_debugfs_state"] = "status=late-watching\napplied=0";
+			return { stdout: "PATHMASK_RELOAD_OK scene-pending\n" };
+		}
+		if (command.includes("/parameters/scope_mode")) return { stdout: loaded ? "global" : "" };
+		if (!loaded && (command.includes("grep '^pathmask '") || command.includes("cat /proc/modules"))) return { stdout: "" };
+	} } }));
+	try {
+		page.$("#dock-apps").click();
+		page.$("#reloadBtn").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent.includes("后台继续等待 Scene"), "pending Scene toast");
+	} finally { await settle(page); page.close(); }
+});
+
 test("companion activation does not reload an empty blacklist", async () => {
 	const root = "/data/adb/pathmask/";
 	let companion = false;

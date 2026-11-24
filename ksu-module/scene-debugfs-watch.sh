@@ -144,8 +144,36 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 	mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 fi
 printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
+# The reload lock is shared with the WebUI (see reloadLockShell in app.js).
+# Owners record their pid so a lock left by a killed shell can be reclaimed.
+reload_lock_owner_alive() {
+	OWNER=$(cat "$RELOAD_LOCK_DIR/pid" 2>/dev/null) || OWNER=''
+	case "$OWNER" in ''|*[!0-9]*) return 1 ;; esac
+	kill -0 "$OWNER" 2>/dev/null
+}
+
+reload_lock_busy() {
+	[ -d "$RELOAD_LOCK_DIR" ] && reload_lock_owner_alive
+}
+
+take_reload_lock() {
+	if ! mkdir "$RELOAD_LOCK_DIR" 2>/dev/null; then
+		[ -d "$RELOAD_LOCK_DIR" ] && [ ! -L "$RELOAD_LOCK_DIR" ] || return 1
+		reload_lock_owner_alive && return 1
+		# Give a new owner time to write its pid after mkdir.
+		sleep 1
+		reload_lock_owner_alive && return 1
+		rm -f "$RELOAD_LOCK_DIR/pid" 2>/dev/null
+		rmdir "$RELOAD_LOCK_DIR" 2>/dev/null || return 1
+		mkdir "$RELOAD_LOCK_DIR" 2>/dev/null || return 1
+	fi
+	RELOAD_LOCK_HELD=1
+	printf '%s\n' "$$" > "$RELOAD_LOCK_DIR/pid" || { release_reload_lock; return 1; }
+}
+
 release_reload_lock() {
 	if [ "$RELOAD_LOCK_HELD" = 1 ]; then
+		rm -f "$RELOAD_LOCK_DIR/pid" 2>/dev/null || true
 		rmdir "$RELOAD_LOCK_DIR" 2>/dev/null || true
 		RELOAD_LOCK_HELD=0
 	fi
@@ -166,7 +194,7 @@ log_i "Scene debugfs late watcher started (max ${WATCH_SECONDS}s)"
 
 while :; do
 	# A foreground transaction may be testing a mode that is not yet saved.
-	if [ -d "$RELOAD_LOCK_DIR" ]; then
+	if reload_lock_busy; then
 		NOW="$(date +%s 2>/dev/null || echo 0)"
 		[ "$NOW" -lt "$END" ] || exit 0
 		sleep "$POLL_SECONDS"
@@ -184,11 +212,10 @@ while :; do
 	fi
 
 	if find_scene_debugfs; then
-		if ! mkdir "$RELOAD_LOCK_DIR" 2>/dev/null; then
+		if ! take_reload_lock; then
 			sleep "$POLL_SECONDS"
 			continue
 		fi
-		RELOAD_LOCK_HELD=1
 		# Re-read the saved mode and pause state under the same lock as WebUI.
 		should_stop && exit 0
 		if grep -q "^$MODULE_NAME " /proc/modules 2>/dev/null && running_targets_include_found; then

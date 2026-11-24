@@ -48,6 +48,7 @@ AUTO_SCENE_DEBUGFS_CONFIG="$PERSIST_DIR/auto_scene_debugfs.conf"
 PROC_GUARD_CONFIG="$PERSIST_DIR/procguard.conf"
 APP_PROFILES_CONFIG="$PERSIST_DIR/app_profiles.conf"
 RULE_MODE_CONFIG="$PERSIST_DIR/rule_mode.conf"
+RELOAD_LOCK_DIR="$PERSIST_DIR/.profile-apply-lock"
 SCENE_DEBUGFS_PATHS_PATH="$PERSIST_DIR/scene_debugfs_paths"
 SCENE_DEBUGFS_STATE_PATH="$PERSIST_DIR/scene_debugfs_state"
 SCENE_WATCH_STOP_PATH="$PERSIST_DIR/scene_debugfs_watch.stop"
@@ -70,6 +71,7 @@ SCENE_DEBUGFS_STATUS=disabled
 SCENE_PACKAGE_STATUS=unknown
 UNRESOLVED_PACKAGES=0
 RULE_MODE=""
+SCENE_WATCH_STARTED=0
 # A background reload may outlive the UI request that started its watcher.
 if [ "${PATHMASK_SCENE_WATCH_RELOAD:-0}" = "1" ]; then
 	unset PATHMASK_RULE_MODE_REQUEST PATHMASK_PROFILE_REQUEST PATHMASK_APP_PROFILES_STAGE
@@ -533,6 +535,7 @@ start_scene_debugfs_watcher() {
 		fi
 		exec sh "$SCENE_WATCH_SCRIPT"
 	) </dev/null >/dev/null 2>&1 &
+	SCENE_WATCH_STARTED=1
 	log_i "started Scene debugfs late watcher pid=$!"
 }
 
@@ -888,7 +891,15 @@ skip_without_targets() {
 		profile_ack
 	fi
 	if [ -n "$RULE_MODE_REQUEST" ] || [ "$REQUIRE_RELOAD_RECEIPT" = 1 ]; then
-		# Only a verified empty managed blacklist may acknowledge no load.
+		# Shared-path modes may wait on Scene's late mount: the detached
+		# watcher loads PathMask once it appears, so this is not a failure.
+		if [ "$1" = skipped-targets-missing ] && [ "$SCENE_WATCH_STARTED" = 1 ] &&
+		   [ "$RULE_MODE" != deny ] && ! grep -q '^pathmask ' /proc/modules; then
+			rule_mode_ack
+			reload_ack scene-pending
+			exit 0
+		fi
+		# Otherwise only a verified empty managed blacklist may acknowledge no load.
 		if [ "$RULE_MODE" != deny ] || [ "$1" != skipped-empty-targets ] ||
 		   grep -q '^pathmask ' /proc/modules; then
 			printf '%s\n' "$2" >&2
@@ -1339,6 +1350,14 @@ if [ "${PATHMASK_SCENE_WATCH_RELOAD:-0}" = "1" ] && [ -e "$SCENE_WATCH_STOP_PATH
 fi
 if [ "${PATHMASK_SCENE_WATCH_RELOAD:-0}" != "1" ]; then
 	rm -f "$SCENE_WATCH_STOP_PATH" 2>/dev/null || true
+fi
+# A boot run (no WebUI request, not the watcher) cannot overlap a reload
+# transaction, so any reload lock here survived a reboot. Its recorded pid
+# may now belong to an unrelated process, so drop it unconditionally.
+if [ "${PATHMASK_SCENE_WATCH_RELOAD:-0}" != "1" ] && [ "$REQUIRE_RELOAD_RECEIPT" != 1 ] &&
+   [ -z "$RULE_MODE_REQUEST$PROFILE_REQUEST" ] && [ -d "$RELOAD_LOCK_DIR" ] && [ ! -L "$RELOAD_LOCK_DIR" ]; then
+	rm -f "$RELOAD_LOCK_DIR/pid" 2>/dev/null || true
+	rmdir "$RELOAD_LOCK_DIR" 2>/dev/null || true
 fi
 write_boot_state "init" "" ""
 

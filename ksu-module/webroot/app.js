@@ -4030,7 +4030,7 @@ function showValidation(errors, warnings, throwOnError) {
 async function saveConfig() {
 	const editor = activePage;
 	const entries = readConfigurationEdits();
-	const pending = editor === "config" && currentScope() !== savedRuleMode();
+	const pending = editor === "config" && ruleScopeDraft && ruleScopeDraft !== savedRuleMode();
 	if (editor !== "general") await validateConfig({ throwOnError: true });
 	await persistConfiguration(entries);
 	await refreshConfig();
@@ -4088,13 +4088,46 @@ async function persistConfiguration(entries) {
 	for (const [path, values] of entries) await writeLines(path, values);
 }
 
+// Shell helpers for the reload lock shared with scene-debugfs-watch.sh. The
+// owner writes its pid so a lock left by a killed shell (manager closed,
+// SIGKILL) can be reclaimed instead of blocking every reload until reboot.
+function reloadLockShell() {
+	return `lock=${shellQuote(RELOAD_LOCK)}
+reload_lock_held=0
+reload_lock_owner_alive() {
+	owner=$(cat "$lock/pid" 2>/dev/null) || owner=''
+	case "$owner" in ''|*[!0-9]*) return 1 ;; esac
+	kill -0 "$owner" 2>/dev/null
+}
+take_reload_lock() {
+	if ! mkdir "$lock" 2>/dev/null; then
+		[ -d "$lock" ] && [ ! -L "$lock" ] || return 1
+		reload_lock_owner_alive && return 1
+		# Give a new owner time to write its pid after mkdir.
+		sleep 1
+		reload_lock_owner_alive && return 1
+		rm -f "$lock/pid" 2>/dev/null
+		rmdir "$lock" 2>/dev/null || return 1
+		mkdir "$lock" 2>/dev/null || return 1
+	fi
+	reload_lock_held=1
+	printf '%s\\n' "$$" > "$lock/pid" || { drop_reload_lock; return 1; }
+}
+drop_reload_lock() {
+	[ "$reload_lock_held" = 1 ] || return 0
+	rm -f "$lock/pid" 2>/dev/null
+	rmdir "$lock" 2>/dev/null
+	reload_lock_held=0
+}`;
+}
+
 // Mode trials and profile commits already own this lock. Other reloads and
 // pause take it here so a late background reload can't undo the action.
 function withReloadLock(command) {
 	return `mkdir -p ${shellQuote(CONFIGDIR)} || exit 30
-lock=${shellQuote(RELOAD_LOCK)}
-mkdir "$lock" || exit 30
-trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+${reloadLockShell()}
+trap 'drop_reload_lock || true' EXIT
+take_reload_lock || exit 30
 ${command}`;
 }
 
@@ -4119,10 +4152,13 @@ async function reloadSavedSettings() {
 	setLogContent("kernel", output);
 	await refreshDiagnostics();
 	const receipts = linesFromText(output);
-	if (receipts.includes("PATHMASK_RELOAD_OK empty-blacklist") && !lastSnapshot.moduleText?.trim()) return false;
-	if (!receipts.includes("PATHMASK_RELOAD_OK active") || !lastSnapshot.moduleText?.trim())
+	const unloaded = !lastSnapshot.moduleText?.trim();
+	if (receipts.includes("PATHMASK_RELOAD_OK empty-blacklist") && unloaded) return "empty";
+	// Only Scene's late mount is configured and the watcher will load it.
+	if (receipts.includes("PATHMASK_RELOAD_OK scene-pending") && unloaded) return "scene-pending";
+	if (!receipts.includes("PATHMASK_RELOAD_OK active") || unloaded)
 		throw new Error(t("热重载未确认生效，请查看诊断。"));
-	return true;
+	return "active";
 }
 
 async function applyRuleMode() {
@@ -4135,14 +4171,14 @@ cfg=${shellQuote(files.ruleMode)}
 if [ -e "$cfg" ] || [ -L "$cfg" ]; then
 	[ -f "$cfg" ] && [ ! -L "$cfg" ] || exit 30
 fi
-lock=${shellQuote(RELOAD_LOCK)}
-mkdir "$lock" || exit 30
+${reloadLockShell()}
 stage=''
 finish() {
 	[ -z "$stage" ] || rm -f "$stage"
-	rmdir "$lock" 2>/dev/null || true
+	drop_reload_lock || true
 }
 trap finish EXIT
+take_reload_lock || exit 30
 stage=$(mktemp ${shellQuote(CONFIGDIR + "/.rule-mode.XXXXXX")}) || exit 30
 mode=${shellQuote(mode)}
 printf '%s\n' "$mode" > "$stage" || exit 30
@@ -4187,9 +4223,10 @@ async function applyWritePolicy() {
 	const value = checked ? checked.value : "passthrough";
 	await writeLines(files.writeOpPolicy, [value]);
 	statusText.textContent = t("正在应用写入伪装策略...");
-	const loaded = await reloadSavedSettings();
-	showToast(loaded ? t(`写入伪装已切换为「{0}」`, [writePolicyLabel(value)])
-		: t("没有启用的应用路径，黑名单不会对任何应用生效。"));
+	const result = await reloadSavedSettings();
+	showToast(result === "empty" ? t("没有启用的应用路径，黑名单不会对任何应用生效。")
+		: result === "scene-pending" ? t("热重载完成，后台继续等待 Scene 启动")
+			: t(`写入伪装已切换为「{0}」`, [writePolicyLabel(value)]));
 }
 
 async function reloadModule() {
@@ -4197,12 +4234,15 @@ async function reloadModule() {
 	const entries = readConfigurationEdits();
 	if (editor !== "general") await validateConfig({ throwOnError: true, requireModuleFile: true });
 	await persistConfiguration(entries);
-	if (editor === "config" && currentScope() !== savedRuleMode()) {
+	// Only an explicit choice switches modes. Without a saved mode the
+	// displayed scope is derived from legacy scope_mode.conf, and applying it
+	// would silently move an upgraded install onto per-app-only blacklist rules.
+	if (editor === "config" && ruleScopeDraft && ruleScopeDraft !== savedRuleMode()) {
 		await applyRuleMode();
 		return;
 	}
 	statusText.textContent = t("正在热重载...");
-	if (!await reloadSavedSettings()) {
+	if (await reloadSavedSettings() === "empty") {
 		showToast(t("没有启用的应用路径，黑名单不会对任何应用生效。"));
 		return;
 	}
@@ -4868,15 +4908,13 @@ async function applyAppProfileChanges(changes, baseline) {
 			// After handoff the shell owns cleanup even if the bridge times out.
 			handedOff = true;
 			const output = await execShell(`${appProfileSnapshotShell()}
-lock=${shellQuote(RELOAD_LOCK)}
-owned=0
+${reloadLockShell()}
 finish() {
 	${cleanup} || true
-	if [ "$owned" = 1 ]; then rmdir "$lock" 2>/dev/null || true; fi
+	drop_reload_lock || true
 }
 trap finish EXIT
-mkdir "$lock" || exit 23
-owned=1
+take_reload_lock || exit 23
 [ "$(cat ${shellQuote(files.ruleMode)})" = deny ] || exit 29
 expected=${shellQuote(fingerprint)}
 profile_snapshot && [ "$fingerprint" = "$expected" ] || exit 24
