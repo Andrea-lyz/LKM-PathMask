@@ -70,7 +70,13 @@ SCENE_DEBUGFS_STATUS=disabled
 SCENE_PACKAGE_STATUS=unknown
 UNRESOLVED_PACKAGES=0
 RULE_MODE=""
+# A background reload may outlive the UI request that started its watcher.
+if [ "${PATHMASK_SCENE_WATCH_RELOAD:-0}" = "1" ]; then
+	unset PATHMASK_RULE_MODE_REQUEST PATHMASK_PROFILE_REQUEST PATHMASK_APP_PROFILES_STAGE
+	unset PATHMASK_REQUIRE_RELOAD_RECEIPT PATHMASK_RESET_FAIL_GUARD PATHMASK_IGNORE_FAIL_GUARD
+fi
 RULE_MODE_REQUEST=${PATHMASK_RULE_MODE_REQUEST:-}
+REQUIRE_RELOAD_RECEIPT=${PATHMASK_REQUIRE_RELOAD_RECEIPT:-0}
 
 read_load_failure_count() {
 	COUNT=0
@@ -518,11 +524,15 @@ start_scene_debugfs_watcher() {
 	[ "${PATHMASK_SCENE_WATCH_RELOAD:-0}" != "1" ] || return
 
 	write_scene_debugfs_state "late-watching" "$APPLIED_ENABLED" "initial scan found no mount; detached background watcher starting"
-	if command -v setsid >/dev/null 2>&1; then
-		PATHMASK_SCENE_APPLIED="$APPLIED_ENABLED" setsid sh "$SCENE_WATCH_SCRIPT" </dev/null >/dev/null 2>&1 &
-	else
-		PATHMASK_SCENE_APPLIED="$APPLIED_ENABLED" sh "$SCENE_WATCH_SCRIPT" </dev/null >/dev/null 2>&1 &
-	fi
+	(
+		unset PATHMASK_RULE_MODE_REQUEST PATHMASK_PROFILE_REQUEST PATHMASK_APP_PROFILES_STAGE
+		unset PATHMASK_REQUIRE_RELOAD_RECEIPT PATHMASK_RESET_FAIL_GUARD PATHMASK_IGNORE_FAIL_GUARD
+		export PATHMASK_SCENE_APPLIED="$APPLIED_ENABLED"
+		if command -v setsid >/dev/null 2>&1; then
+			exec setsid sh "$SCENE_WATCH_SCRIPT"
+		fi
+		exec sh "$SCENE_WATCH_SCRIPT"
+	) </dev/null >/dev/null 2>&1 &
 	log_i "started Scene debugfs late watcher pid=$!"
 }
 
@@ -856,6 +866,12 @@ rule_mode_ack() {
 	fi
 }
 
+reload_ack() {
+	if [ "$REQUIRE_RELOAD_RECEIPT" = "1" ]; then
+		printf 'PATHMASK_RELOAD_OK %s\n' "$1"
+	fi
+}
+
 skip_without_targets() {
 	if [ -n "$PROFILE_FAILURE" ]; then
 		profile_fail
@@ -871,13 +887,15 @@ skip_without_targets() {
 		fi
 		profile_ack
 	fi
-	if [ -n "$RULE_MODE_REQUEST" ]; then
-		# An empty per-app list is valid, unlike a skipped shared ruleset.
-		if [ "$RULE_MODE" != deny ] || grep -q '^pathmask ' /proc/modules; then
+	if [ -n "$RULE_MODE_REQUEST" ] || [ "$REQUIRE_RELOAD_RECEIPT" = 1 ]; then
+		# Only a verified empty managed blacklist may acknowledge no load.
+		if [ "$RULE_MODE" != deny ] || [ "$1" != skipped-empty-targets ] ||
+		   grep -q '^pathmask ' /proc/modules; then
 			printf '%s\n' "$2" >&2
 			exit 1
 		fi
 		rule_mode_ack
+		reload_ack empty-blacklist
 	fi
 	exit 0
 }
@@ -1263,6 +1281,38 @@ wait_for_scope_packages() {
 	read_active_package_config 0
 }
 
+procguard_enabled() {
+	[ "$(head -n 1 "$PROC_GUARD_CONFIG" 2>/dev/null | tr -d '\r ')" = "1" ]
+}
+
+load_procguard() {
+	grep -q '^procguard ' /proc/modules 2>/dev/null && return 0
+	[ -f "$PROC_GUARD_KO_PATH" ] || return 1
+	insmod "$PROC_GUARD_KO_PATH" || return 1
+	grep -q '^procguard ' /proc/modules 2>/dev/null || return 1
+	log_i "loaded $PROC_GUARD_KO_PATH"
+	return 0
+}
+
+apply_procguard() {
+	if procguard_enabled; then
+		if ! load_procguard; then
+			printf 'procguard did not load\n' >&2
+			return 1
+		fi
+		printf 'PATHMASK_PROCGUARD_OK enabled\n'
+	else
+		if grep -q '^procguard ' /proc/modules 2>/dev/null; then
+			rmmod procguard || return 1
+		fi
+		if grep -q '^procguard ' /proc/modules 2>/dev/null; then
+			printf 'procguard is still loaded\n' >&2
+			return 1
+		fi
+		printf 'PATHMASK_PROCGUARD_OK disabled\n'
+	fi
+}
+
 if [ "${1:-}" = "--check-app-profiles" ]; then
 	if [ "$#" -eq 2 ] && profile_compile "$2" 1; then
 		exit 0
@@ -1272,6 +1322,12 @@ if [ "${1:-}" = "--check-app-profiles" ]; then
 fi
 
 init_persistent_config
+
+if [ "${1:-}" = "--apply-procguard" ]; then
+	[ "$#" -eq 1 ] || exit 2
+	apply_procguard
+	exit "$?"
+fi
 
 # Pause writes a stop sentinel before unloading so the background watcher
 # cannot race it and restore the module. A normal boot or explicit WebUI hot
@@ -1285,6 +1341,11 @@ if [ "${PATHMASK_SCENE_WATCH_RELOAD:-0}" != "1" ]; then
 	rm -f "$SCENE_WATCH_STOP_PATH" 2>/dev/null || true
 fi
 write_boot_state "init" "" ""
+
+# Companion settings are independent of whether PathMask has any paths.
+if procguard_enabled && ! load_procguard; then
+	log_e "failed to load $PROC_GUARD_KO_PATH (continuing anyway)"
+fi
 
 if [ -n "${PATHMASK_LOAD_FAIL_LIMIT:-}" ]; then
 	LOAD_FAIL_LIMIT="$PATHMASK_LOAD_FAIL_LIMIT"
@@ -1543,14 +1604,14 @@ if grep -q '^pathmask ' /proc/modules 2>/dev/null; then
 	reset_load_failure_guard
 	log_i "pathmask is already loaded"
 	write_boot_state "already-loaded" "" ""
-	[ -z "$PROFILE_REQUEST$RULE_MODE_REQUEST" ] || exit 1
+	[ -z "$PROFILE_REQUEST$RULE_MODE_REQUEST" ] && [ "$REQUIRE_RELOAD_RECEIPT" != 1 ] || exit 1
 	exit 0
 fi
 
 if grep -q '^nohello ' /proc/modules 2>/dev/null; then
 	log_i "legacy nohello module is loaded; unload it before loading pathmask"
 	write_boot_state "skipped-legacy-loaded" "legacy nohello in /proc/modules" ""
-	[ -z "$PROFILE_REQUEST$RULE_MODE_REQUEST" ] || exit 1
+	[ -z "$PROFILE_REQUEST$RULE_MODE_REQUEST" ] && [ "$REQUIRE_RELOAD_RECEIPT" != 1 ] || exit 1
 	exit 0
 fi
 
@@ -1572,21 +1633,6 @@ if [ "$AUTO_SCENE_DEBUGFS" = "1" ] && [ "$SCENE_DEBUGFS_COUNT" -gt 0 ]; then
 	write_scene_debugfs_state "found" "0" "discovered $SCENE_DEBUGFS_COUNT matching mount(s) before insmod"
 fi
 
-# procguard companion module: strips the gid 3009 (AID_READPROC) /proc
-# bypass from Android isolated processes (LSPosed Privisolated). Opt-in
-# via procguard.conf (default 0, toggled from the WebUI); this script
-# seeds the persistent copy from the module-bundled default on first
-# boot and honours the persistent copy afterwards.
-if [ -f "$PROC_GUARD_KO_PATH" ] && [ "$(head -n 1 "$PROC_GUARD_CONFIG" 2>/dev/null | tr -d ' ')" = "1" ]; then
-	if grep -q '^procguard ' /proc/modules 2>/dev/null; then
-		log_i "procguard already loaded, skip"
-	elif insmod "$PROC_GUARD_KO_PATH"; then
-		log_i "loaded $PROC_GUARD_KO_PATH"
-	else
-		log_e "failed to load $PROC_GUARD_KO_PATH (continuing anyway)"
-	fi
-fi
-
 if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" scope_mode="$SCOPE_MODE" deny_uids="$DENY_UIDS" enable_syscall_hooks="$ENABLE_SYSCALL_HOOKS" syscall_hooks="$SYSCALL_HOOKS" write_op_policy="$WRITE_OP_POLICY" profile_mode="$PROFILE_MODE"; then
 	reset_load_failure_guard
 	log_i "loaded $KO_PATH target_paths=$TARGET_PATHS hide_dirents=$HIDE_DIRENTS scope_mode=$SCOPE_MODE deny_uids=$DENY_UIDS enable_syscall_hooks=$ENABLE_SYSCALL_HOOKS syscall_hooks=$SYSCALL_HOOKS write_op_policy=$WRITE_OP_POLICY profile_mode=$PROFILE_MODE"
@@ -1603,6 +1649,7 @@ if insmod "$KO_PATH" target_paths="$TARGET_PATHS" hide_dirents="$HIDE_DIRENTS" s
 	write_boot_state "loaded" "$TARGET_PATHS" ""
 	profile_ack
 	rule_mode_ack
+	reload_ack active
 	if [ "$AUTO_SCENE_DEBUGFS" = "1" ]; then
 		write_scene_debugfs_state "$SCENE_DEBUGFS_STATUS" "1" "discovered $SCENE_DEBUGFS_COUNT matching mount(s)"
 		start_scene_debugfs_watcher "1"

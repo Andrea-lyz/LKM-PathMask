@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { JSDOM } from "jsdom";
-import { createKsuStub } from "./ksu-stub.mjs";
+import { createKsuStub, resolveCommand } from "./ksu-stub.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webroot = join(here, "..", "..", "..", "ksu-module", "webroot");
@@ -317,6 +317,7 @@ test("explicit mode apply hydrates the saved selection only after a service rece
 	const conf = {};
 	let accept = false;
 	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("/parameters/scope_mode")) return { stdout: conf["/data/adb/pathmask/rule_mode.conf"] || "deny" };
 		if (!command.includes('export PATHMASK_RULE_MODE_REQUEST="$mode"')) return undefined;
 		if (!accept) return { errno: 32, stderr: "RULE_MODE_UNCONFIRMED" };
 		conf["/data/adb/pathmask/rule_mode.conf"] = "global";
@@ -334,6 +335,88 @@ test("explicit mode apply hydrates the saved selection only after a service rece
 		const change = page.stub.calls.find(command => command.includes("PATHMASK_RULE_MODE_REQUEST"));
 		assert(change.indexOf("grep -Fxq") < change.indexOf('mv "$stage"'), "receipt gates replacing the saved mode");
 		assertEqual(page.$("#scopeState").textContent, "全局", "dashboard follows the applied mode");
+	} finally { await settle(page); page.close(); }
+});
+
+test("same-mode reload reports unconfirmed when startup skips loading", async () => {
+	const root = "/data/adb/pathmask/";
+	let loaded = true;
+	const conf = { [root + "rule_mode.conf"]: "global", [root + "boot_state"]: "state=loaded\nrule_mode=global" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("PATHMASK_REQUIRE_RELOAD_RECEIPT=1")) {
+			loaded = false;
+			conf[root + "boot_state"] = "state=skipped-targets-missing\nrule_mode=global";
+			return { stdout: "" };
+		}
+		if (command.includes("/parameters/scope_mode")) return { stdout: loaded ? "global" : "" };
+		if (!loaded && (command.includes("grep '^pathmask '") || command.includes("cat /proc/modules"))) return { stdout: "" };
+	} } }));
+	try {
+		page.$("#dock-apps").click();
+		page.$("#reloadBtn").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent.includes("未确认生效"), "unconfirmed reload");
+		assertEqual(page.$("#moduleState").textContent, "未加载", "module remains inactive");
+	} finally { await settle(page); page.close(); }
+});
+
+test("companion activation does not reload an empty blacklist", async () => {
+	const root = "/data/adb/pathmask/";
+	let companion = false;
+	const conf = { [root + "rule_mode.conf"]: "deny", [root + "boot_state"]: "state=skipped-empty-targets\nrule_mode=deny" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("--apply-procguard")) {
+			assert(!command.includes("rmmod pathmask"), "companion request does not unload PathMask");
+			companion = true;
+			return { stdout: "PATHMASK_PROCGUARD_OK enabled\n" };
+		}
+		if (command.endsWith(" > '/data/adb/pathmask/procguard.conf'")) { conf[root + "procguard.conf"] = "1"; return { stdout: "" }; }
+		if (command.includes("grep '^procguard '")) return { stdout: companion ? "procguard 4096 0 - Live" : "" };
+		if (command.includes("grep '^pathmask '") || command.includes("cat /proc/modules")) return { stdout: "" };
+	} } }));
+	try {
+		page.$("#dock-settings").click(); page.$("#tab-procguard").click();
+		page.$("#procguardEnableInput").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent.includes("隔离防护已启用"), "companion receipt");
+		assert(companion && page.$("#procguardStats").textContent.includes("已加载"), "the companion is active");
+		assertEqual(page.$("#moduleState").textContent, "未加载", "empty PathMask is not reloaded");
+	} finally { await settle(page); page.close(); }
+});
+
+test("whitelist diagnostics and rows honor the active UID set", async () => {
+	const root = "/data/adb/pathmask/";
+	const conf = { [root + "scope_mode.conf"]: "deny", [root + "rule_mode.conf"]: "allow", [root + "boot_state"]: "state=loaded\nrule_mode=allow" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("--- basic ---")) return { stdout: resolveCommand(command)
+			.replace("scope_mode=deny", "scope_mode=allow").replace("deny_uids=10123,10124,10125", "deny_uids=0,1000,2000") };
+		if (command.includes("/parameters/scope_mode")) return { stdout: "allow" };
+		if (command.includes("/parameters/deny_uids")) return { stdout: "0,1000,2000" };
+	} } }));
+	try {
+		assert(!page.pm().lastSnapshot.facts.stale.scope && !page.pm().lastSnapshot.facts.stale.denyUids, "a dormant config is not a stale running scope");
+		page.$("#dock-apps").click();
+		await waitFor(page, () => page.$$(".allowAppRow").length === 3, "manual whitelist");
+		page.$("#showSystemInput").click();
+		await waitFor(page, () => page.$$(".allowAppRow").length === 5, "system rows");
+		const row = page.$$(".allowAppRow").find(r => r.textContent.includes("com.android.settings"));
+		assert(!row.querySelector('[role="switch"]').checked, "system app is not manually selected");
+		assertEqual(row.querySelector(".runtimeExemption").textContent, "共享路径：运行中已豁免", "actual UID state is displayed");
+	} finally { await settle(page); page.close(); }
+});
+
+test("blacklist diagnosis uses stored profiles instead of dormant shared paths", async () => {
+	const root = "/data/adb/pathmask/";
+	const conf = { [root + "rule_mode.conf"]: "deny", [root + "target_path.conf"]: "dormant invalid path", [root + "boot_state"]: "state=loaded\nrule_mode=deny" };
+	const page = await bootReady(await bootPage({ stub: { conf, respond(command) {
+		if (command.includes("/parameters/app_profiles")) return { stdout: "12345 1" };
+		if (command.includes("--check-app-profiles")) return { stdout: "" };
+	} } }));
+	try {
+		assertEqual(page.pm().lastSnapshot.facts.confTargetCount, 0, "dormant paths not counted");
+		assertEqual(page.pm().lastSnapshot.facts.appPathCount, 1, "path count comes from the kernel receipt");
+		page.$('#homePanel input[value="global"]').click();
+		page.$("#dock-settings").click(); page.$("#tab-diagnosis").click(); page.$("#validateConfigBtn").click();
+		await waitFor(page, () => !page.pm().busy && page.$("#toast").textContent === "配置校验通过", "stored profile validation");
+		assert(page.stub.calls.some(c => c.includes("--check-app-profiles '/data/adb/pathmask/app_profiles.conf'")), "saved mode wins over preview");
 	} finally { await settle(page); page.close(); }
 });
 

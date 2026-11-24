@@ -147,7 +147,12 @@ pm_apply_app_profiles() { cp "$APP_PROFILE_RULES" "$TEST_BOOT/committed"; }
 SH
 cat > "$BOOT/bin/insmod" <<'SH'
 #!/bin/sh
-printf '%s\n' "$@" > "$TEST_BOOT/insmod-args"
+case "$1" in
+	*/procguard.ko)
+		printf '%s\n' 'procguard 4096 0 - Live' >> "$TEST_BOOT/modules"
+		: > "$TEST_BOOT/companion-loaded" ;;
+	*) printf '%s\n' "$@" > "$TEST_BOOT/insmod-args" ;;
+esac
 SH
 cat > "$BOOT/bin/cmd" <<'SH'
 #!/bin/sh
@@ -218,3 +223,57 @@ boot_rules deny > "$BOOT/output"
 [ ! -e "$BOOT/insmod-args" ]
 grep -Fxq 'PATHMASK_RULE_MODE_OK deny' "$BOOT/output"
 printf '  ok empty blacklist starts no module, without enabling shared paths\n'
+
+printf '%s\n' deny > "$BOOT/config/rule_mode.conf"
+printf '%s\n' 'app 0 com.example.notes 1 0' "path $APP_PATH" > "$BOOT/config/app_profiles.conf"
+PATHMASK_SCENE_WATCH_RELOAD=1 PATHMASK_PROFILE_REQUEST=stale boot_rules global > "$BOOT/output"
+grep -Fxq 'target_paths=' "$BOOT/insmod-args"
+grep -Fxq 'scope_mode=deny' "$BOOT/insmod-args"
+grep -Fxq "10123 0 $APP_PATH" "$BOOT/committed"
+if grep -q 'PATHMASK_RULE_MODE_OK' "$BOOT/output"; then exit 1; fi
+printf '  ok background service strips inherited trial and profile requests\n'
+
+: > "$BOOT/module/procguard.ko"
+printf '%s\n' 1 > "$BOOT/config/procguard.conf"
+: > "$BOOT/config/app_profiles.conf"
+PATHMASK_REQUIRE_RELOAD_RECEIPT=1 boot_rules '' > "$BOOT/output"
+[ ! -f "$BOOT/insmod-args" ] && [ -f "$BOOT/companion-loaded" ]
+grep -Fxq 'PATHMASK_RELOAD_OK empty-blacklist' "$BOOT/output"
+printf '  ok empty blacklist preserves companion activation and returns the empty receipt\n'
+
+printf '%s\n' global > "$BOOT/config/rule_mode.conf"
+printf '%s\n' "$BOOT/missing" > "$BOOT/config/target_path.conf"
+if PATHMASK_REQUIRE_RELOAD_RECEIPT=1 boot_rules '' > "$BOOT/output" 2>&1; then exit 1; fi
+[ ! -e "$BOOT/insmod-args" ]
+if grep -q 'PATHMASK_RELOAD_OK' "$BOOT/output"; then exit 1; fi
+printf '  ok shared-mode skip returns no successful reload receipt\n'
+
+# Keep every operation on synthetic local inputs; no real watchers or modules.
+cat > "$BOOT/bin/rmmod" <<'SH'
+#!/bin/sh
+: > "$TEST_BOOT/unload-attempted"
+exit 1
+SH
+chmod +x "$BOOT/bin/rmmod"
+sed -e "s|^PERSIST_DIR=.*|PERSIST_DIR=\"$BOOT/config\"|" -e "s|/proc/modules|$BOOT/modules|g" \
+	"$ROOT/ksu-module/scene-debugfs-watch.sh" | awk '
+	/^case "\$WATCH_SECONDS" in/ {
+		print "scene_package_status() { printf installed; }"
+		print "find_scene_debugfs() { return 0; }"
+		print "running_targets_include_found() { return 1; }"
+	}
+	{ print }
+' > "$BOOT/module/scene-debugfs-watch.sh"
+printf '%s\n' 'pathmask 4096 0 - Live' >> "$BOOT/modules"
+printf '%s\n' allow > "$BOOT/config/rule_mode.conf"
+printf '%s\n' 1 > "$BOOT/config/auto_scene_debugfs.conf"
+mkdir "$BOOT/config/.profile-apply-lock"
+PATHMASK_RULE_MODE_REQUEST=allow PATHMASK_SCENE_WATCH_SECONDS=6 sh "$BOOT/module/scene-debugfs-watch.sh" &
+watcher=$!
+sleep 1
+[ ! -e "$BOOT/unload-attempted" ]
+printf '%s\n' deny > "$BOOT/config/rule_mode.conf"
+rmdir "$BOOT/config/.profile-apply-lock"
+wait "$watcher"
+[ ! -e "$BOOT/unload-attempted" ]
+printf '  ok watcher waits for the transaction and stops after blacklist commit\n'

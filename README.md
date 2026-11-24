@@ -353,8 +353,9 @@ Open KernelSU Manager, enter PathMask WebUI, then use:
   **Apply selected mode** changes the runtime policy after saving its configuration.
 - **Configuration**: Global shows only the shared path editor. Blacklist shows a
   searchable list and opens individual path profiles. Whitelist shows shared
-  paths followed by a searchable list of switches; on means exempt from the
-  shared rules. Apply Blacklist mode before using **Apply to module** for drafts.
+  paths followed by searchable switches that edit the manual whitelist. Actual
+  shared-path exemptions are shown separately. Apply Blacklist mode before
+  using **Apply to module** for drafts.
 - **Settings**: language, legacy configuration, and the tools below.
 
 Upgrades do not convert existing rules or switch their behavior automatically.

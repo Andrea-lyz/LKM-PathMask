@@ -51,6 +51,7 @@ const PROCGUARD_MODULE_NAME = "procguard";
 const MODDIR = `/data/adb/modules/${MODULE_ID}`;
 const LEGACY_MODDIR = `/data/adb/modules/${LEGACY_MODULE_ID}`;
 const CONFIGDIR = "/data/adb/pathmask";
+const RELOAD_LOCK = `${CONFIGDIR}/.profile-apply-lock`;
 const LEGACY_CONFIGDIR = "/data/adb/nohello";
 const LOG_PAGE_LINES = 80;
 
@@ -188,6 +189,8 @@ const EN_TEXT = {
 	"常规": "General",
 	"主导航": "Main navigation",
 	"应用所选模式": "Apply selected mode",
+	"热重载未确认生效，请查看诊断。": "Reload did not confirm activation. Check diagnostics.",
+	"设置已保存，但未确认防护状态，请查看诊断。": "The setting was saved, but protection status could not be confirmed. Check diagnostics.",
 	"模式文件无效，重新应用一个模式可修复。": "The mode file is invalid. Apply a mode to repair it.",
 	"逐应用规则": "Per-app rules",
 	"内核当前确认 {0} 条逐应用路径。": "The kernel currently confirms {0} per-app paths.",
@@ -196,8 +199,10 @@ const EN_TEXT = {
 	"高级 UID 选项": "Advanced UID options",
 	"这里保留原有规则供查看和编辑，不会转换成逐应用配置。": "Existing rules can be viewed and edited here. They are not converted to per-app profiles.",
 	"先在主页应用黑名单模式，再应用逐应用草稿。": "Apply Blacklist mode on Home before applying per-app drafts.",
-	"打开开关即加入白名单，豁免上方的共享路径规则。": "Turn on a switch to exempt that app from the shared path rules above.",
-	"将 {0} 加入白名单": "Exempt {0} from shared path rules",
+	"开关只编辑手动白名单；运行中豁免状态另行显示（也可能来自高级 UID 或共享 UID）。": "Switches edit the manual whitelist. Active exemptions, which can also come from UID options or shared UIDs, are shown separately.",
+	"将 {0} 手动加入白名单": "Add {0} to the manual whitelist",
+	"共享路径：运行中已豁免": "Shared paths: currently exempt",
+	"共享路径：运行中未豁免": "Shared paths: currently not exempt",
 	"全局使用共享路径；配置页不需要选择应用。": "Global uses shared paths and does not require app selection.",
 	"黑名单只使用各应用保存的路径，不使用旧版共享路径。": "Blacklist uses each app’s saved paths, not the old shared paths.",
 	"白名单使用共享路径，打开开关的应用豁免。": "Whitelist uses shared paths and exempts apps with their switch on.",
@@ -224,7 +229,7 @@ const EN_TEXT = {
 	"内核已确认 {0} 条逐应用路径，配置已保存。": "The kernel confirmed {0} per-app paths and the configuration was saved.",
 	"模块已有规则": "Module profile",
 	"无法校验现有逐应用配置，未覆盖文件。": "The existing per-app configuration could not be verified. No file was overwritten.",
-	"同一应用的配置已被修改，请备份草稿并重新打开 WebUI。": "This app profile has been changed. Back up the drafts and reopen WebUI.",
+	"同一应用的配置已被修改。请记下未应用的更改，重新打开 WebUI 后再编辑。": "This profile changed in another session. Note your unapplied edits, then reopen WebUI and edit again.",
 	"合并后的规则无效或超过上限。": "The merged profiles are invalid or exceed the limit.",
 	"无法创建规则暂存文件。": "Unable to create a staging file for the profiles.",
 	"没有收到内核生效确认。": "No confirmation was received from the kernel.",
@@ -1308,12 +1313,26 @@ function normalizeScope(value) {
 }
 
 function savedRuleMode(snapshot = lastSnapshot) {
-	const value = (snapshot.ruleModeText || "").trim();
+	const value = (snapshot.ruleModeText || "").replace(/\n+$/, "");
 	return ["global", "deny", "allow"].includes(value) ? value : "";
 }
 
+function configuredRuleScope(snapshot = lastSnapshot) {
+	return savedRuleMode(snapshot) || normalizeScope(snapshot.scopeText);
+}
+
+function runningRuleScope(snapshot = lastSnapshot) {
+	const mode = firstLine(snapshot.sysScopeText);
+	return snapshot.moduleText?.trim() && ["global", "deny", "allow"].includes(mode) ? mode : "";
+}
+
+function emptyBlacklist(snapshot = lastSnapshot) {
+	return savedRuleMode(snapshot) === "deny" && !snapshot.moduleText?.trim() &&
+		snapshot.bootState?.ruleMode === "deny" && snapshot.bootState.state === "skipped-empty-targets";
+}
+
 function currentScope() {
-	return ruleScopeDraft || savedRuleMode() || normalizeScope(lastSnapshot.scopeText || "deny");
+	return ruleScopeDraft || configuredRuleScope();
 }
 
 function ruleEditorScope() {
@@ -1331,7 +1350,7 @@ function updateScopeCopy(scope) {
 	const normal = normalizeScope(scope);
 	setText("#packagePanelTitle", normal === "allow" ? t("应用白名单") : normal === "deny" ? t("应用黑名单") : t("应用列表"));
 	setText("#scopeListHint", normal === "allow"
-		? t("打开开关即加入白名单，豁免上方的共享路径规则。")
+		? t("开关只编辑手动白名单；运行中豁免状态另行显示（也可能来自高级 UID 或共享 UID）。")
 		: normal === "deny"
 			? t("黑名单模式：勾选的应用会看不到隐藏路径。")
 			: t("全局模式：所有应用都会看不到隐藏路径，应用列表不会参与判断。"));
@@ -1350,12 +1369,12 @@ function updateRuleModeView() {
 			: t("黑名单只使用各应用保存的路径，不使用旧版共享路径。"));
 	const boot = lastSnapshot.bootState;
 	let status;
-	if (!saved && (lastSnapshot.ruleModeText || "").trim()) status = t("模式文件无效，重新应用一个模式可修复。");
+	if (!saved && (lastSnapshot.ruleModeText || boot?.state === "failed-rule-mode")) status = t("模式文件无效，重新应用一个模式可修复。");
 	else if (!saved) status = t("当前保留旧版执行方式。应用所选模式前，请先在配置页保存所需规则。");
 	else if (choice !== saved) status = t("已选「{0}」，尚未应用。请先保存对应规则。", [scopeLabel(choice)]);
-	else if (saved === "deny" && boot?.ruleMode === saved && boot.state === "skipped-empty-targets")
+	else if (emptyBlacklist())
 		status = t("没有启用的应用路径，黑名单不会对任何应用生效。");
-	else if (!lastSnapshot.moduleText?.trim() || boot?.ruleMode !== saved || !["loaded", "already-loaded"].includes(boot?.state))
+	else if (runningRuleScope() !== saved || boot?.ruleMode !== saved || !["loaded", "already-loaded"].includes(boot?.state))
 		status = t("模式已保存，但当前未确认加载。");
 	else status = t("已保存模式：{0}。", [scopeLabel(saved)]);
 	setText("#ruleModeStatus", status);
@@ -1689,7 +1708,7 @@ function appMatchesQuery(app, query) {
 		|| String(app.uid || "").includes(query);
 }
 
-function buildAppRow(app) {
+function buildAppRow(app, exemptions) {
 	const row = document.createElement("label");
 	row.className = selectedPackages.has(app.pkg) ? "appRow selected" : "appRow";
 	const allow = activeListMode === "allow";
@@ -1700,7 +1719,7 @@ function buildAppRow(app) {
 	checkbox.checked = selectedPackages.has(app.pkg);
 	if (allow) {
 		checkbox.setAttribute("role", "switch");
-		checkbox.setAttribute("aria-label", t("将 {0} 加入白名单", [app.label || app.pkg]));
+		checkbox.setAttribute("aria-label", t("将 {0} 手动加入白名单", [app.label || app.pkg]));
 	}
 	checkbox.addEventListener("change", () => {
 		if (checkbox.checked) selectedPackages.add(app.pkg);
@@ -1737,6 +1756,12 @@ function buildAppRow(app) {
 		const description = text.querySelector(".pkgLabel");
 		if (description) description.textContent = app.pkg;
 		text.append(uid);
+		if (exemptions && /^\d+$/.test(app.uid)) {
+			const effective = document.createElement("span");
+			effective.className = "pkgLabel runtimeExemption";
+			effective.textContent = exemptions.has(app.uid) ? t("共享路径：运行中已豁免") : t("共享路径：运行中未豁免");
+			text.append(effective);
+		}
 		const icon = document.createElement("span");
 		icon.className = "directoryIcon";
 		icon.setAttribute("aria-hidden", "true");
@@ -1767,7 +1792,10 @@ function renderApps() {
 	// One append instead of one per row: appending to a live element in
 	// a loop makes the engine re-run layout for each row.
 	const fragment = document.createDocumentFragment();
-	for (const app of shown) fragment.append(buildAppRow(app));
+	const runningUids = (lastSnapshot.sysDenyUids || "").trim();
+	const exemptions = activeListMode === "allow" && runningRuleScope() === "allow" && /^\d+(,\d+)*$/.test(runningUids)
+		? new Set(runningUids.split(",")) : null;
+	for (const app of shown) fragment.append(buildAppRow(app, exemptions));
 
 	appList.textContent = "";
 	appList.append(fragment);
@@ -1895,7 +1923,7 @@ function updateSummary(snapshot) {
 	const loaded = snapshot.moduleText?.trim();
 	const legacyLoaded = snapshot.legacyModuleText?.trim();
 	const managed = savedRuleMode(snapshot);
-	const scope = managed || normalizeScope(snapshot.scopeText || "deny");
+	const scope = runningRuleScope(snapshot) || configuredRuleScope(snapshot);
 	const configuredTargetCount = linesFromText(snapshot.targetText || "").length || DEFAULT_TARGET_PATHS.length;
 	const resolvedTargetCount = Number.parseInt((snapshot.sysResolvedCount || "").trim(), 10);
 	const runtimeAutoCount = linesFromText(snapshot.sceneDebugfsPathsText || "").length;
@@ -1967,9 +1995,8 @@ function updateHealthList() {
 	const loaded = snapshot.moduleText?.trim();
 	const legacyLoaded = snapshot.legacyModuleText?.trim();
 	const managed = savedRuleMode(snapshot);
-	const scope = managed || normalizeScope(snapshot.scopeText);
-	const emptyBlacklist = managed === "deny" && snapshot.bootState?.ruleMode === "deny"
-		&& snapshot.bootState.state === "skipped-empty-targets";
+	const scope = configuredRuleScope(snapshot);
+	const intentionalEmpty = emptyBlacklist(snapshot);
 	const targets = collectPaths();
 	const listScope = listModeForScope(scope);
 	const selected = [...packageSelections[listScope]];
@@ -1983,11 +2010,11 @@ function updateHealthList() {
 		items.push({ level: "ok", title: t("模块已加载"), body: loaded });
 	} else if (legacyLoaded) {
 		items.push({ level: "warn", title: t("旧 nohello 模块仍在运行"), body: t("卸载旧模块并重启后再安装 PathMask。") });
-	} else if (!emptyBlacklist) {
+	} else if (!intentionalEmpty) {
 		items.push({ level: "bad", title: t("模块未加载"), body: t("查看脚本日志和内核日志，重点找 ko 缺失、KMI 不匹配、UID 为空或目标路径不存在。") });
 	}
 
-	const bootStatusItem = describeBootState(snapshot, !!loaded);
+	const bootStatusItem = intentionalEmpty ? null : describeBootState(snapshot, !!loaded);
 	if (bootStatusItem) {
 		items.push(bootStatusItem);
 	}
@@ -2014,9 +2041,9 @@ function updateHealthList() {
 	const autoSceneEnabled = managed !== "deny" && !!$("#autoSceneDebugfsInput")?.checked;
 	if (managed === "deny") {
 		const receipt = /^\d+ (\d+)$/.exec((snapshot.sysAppProfiles || "").trim());
-		items.push({ level: receipt || emptyBlacklist ? "ok" : "warn", title: t("逐应用规则"),
+		items.push({ level: receipt || intentionalEmpty ? "ok" : "warn", title: t("逐应用规则"),
 			body: receipt ? t("内核当前确认 {0} 条逐应用路径。", [receipt[1]])
-				: emptyBlacklist ? t("没有启用的应用路径，黑名单不会对任何应用生效。")
+				 : intentionalEmpty ? t("没有启用的应用路径，黑名单不会对任何应用生效。")
 					: t("逐应用规则尚未收到内核确认。") });
 	} else {
 		if ((scope === "deny" || scope === "allow") && selected.length === 0 && directUids.length === 0 && allowSystemUids.length === 0 && sysUids.length === 0) {
@@ -2567,7 +2594,8 @@ true
 	const confSyscallHooks = (snapshot.syscallHooksText || "")
 		.split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#")).join(",");
 	const confEnableSyscallHooks = firstLine(snapshot.enableSyscallHooksText);
-	const confScopeMode = (snapshot.scopeText || "").trim();
+	const managed = savedRuleMode(snapshot);
+	const confScopeMode = configuredRuleScope(snapshot);
 	const confDirectUids = linesFromText(snapshot.uidText || "");
 	const confAllowSystemUids = normalizeScope(confScopeMode) === "allow"
 		? [...parseAllowSystemUidsText(snapshot.allowSystemUidText || "")]
@@ -2594,9 +2622,10 @@ true
 		}
 	}
 	const confDenyUidsCsv = [...new Set([...confScopeUids, ...resolvedDenyUids])].join(",");
-	const confTargets = linesFromText(snapshot.targetText || "");
+	const confTargets = managed === "deny" ? [] : linesFromText(snapshot.targetText || "");
 	const sysResolvedCount = Number.parseInt(sysfsParams.resolved_count || "-1", 10);
-	const sysScopeMode = sysfsParams.scope_mode || "";
+	const sysScopeMode = sysfsParams.scope_mode || firstLine(snapshot.sysScopeText);
+	const appReceipt = /^\d+ (\d+)$/.exec((sysfsParams.app_profiles || snapshot.sysAppProfiles || "").trim());
 	const sysSyscallHooks = sysfsParams.syscall_hooks || "";
 	const sysEnableSyscallHooks = sysfsParams.enable_syscall_hooks || "";
 	const sysDenyUidsCsv = sysfsParams.deny_uids || "";
@@ -2615,7 +2644,7 @@ true
 		// the kernel-internal default which differs from "".
 		syscallHooks: !!moduleLoaded && confSyscallHooks &&
 			!csvEquivalent(sysSyscallHooks, confSyscallHooks),
-		denyUids: !!moduleLoaded && confDenyUidsCsv &&
+		denyUids: !!moduleLoaded && managed !== "deny" && confScopeMode !== "global" && confDenyUidsCsv &&
 			!csvEquivalent(sysDenyUidsCsv, confDenyUidsCsv),
 	};
 	const anyStale = stale.scope || stale.enableSyscallHooks ||
@@ -2669,6 +2698,9 @@ true
 		writePolicyText: snapshot.writePolicyText || "",
 		sysResolvedCount,
 		confTargetCount: confTargets.length,
+		managed,
+		intentionalEmpty: emptyBlacklist(snapshot),
+		appPathCount: appReceipt ? Number(appReceipt[1]) : null,
 		confSyscallHooks,
 		confEnableSyscallHooks,
 		stale,
@@ -2692,6 +2724,12 @@ true
  * actual problem is "the .ko isn't on disk".
  */
 function computeVerdict(facts) {
+	if (["failed-app-profiles", "failed-rule-mode"].includes(facts.bootStateName)) {
+		return { level: FACT_BAD, headline: t(`service.sh 报告 {0}`, [facts.bootStateName]),
+			suggestions: [t(`详情：{0}`, [facts.bootStateDetail || t("无")])] };
+	}
+	if (facts.intentionalEmpty) return { level: FACT_INFO,
+		headline: t("没有启用的应用路径，黑名单不会对任何应用生效。"), suggestions: [] };
 	if (facts.moduleLoaded) {
 		// Stack of post-loaded checks. Order matters: stale config
 		// dominates over "everything looks fine" because the user
@@ -2712,6 +2750,8 @@ function computeVerdict(facts) {
 				],
 			};
 		}
+		if (facts.managed === "deny" && facts.appPathCount === null) return { level: FACT_WARN,
+			headline: t("逐应用规则尚未收到内核确认。"), suggestions: [] };
 		if (facts.confTargetCount > 0 && facts.sysResolvedCount >= 0 &&
 		    facts.sysResolvedCount < facts.confTargetCount) {
 			// Glob lines that legitimately match nothing should not
@@ -2991,8 +3031,9 @@ function buildKeyFacts(facts) {
 	const lines = [];
 	lines.push(fmtFactRow(
 		t("模块加载状态"),
-		facts.moduleLoaded ? FACT_OK : FACT_BAD,
-		facts.moduleLoaded ? facts.moduleLine : t("未在 /proc/modules"),
+		facts.moduleLoaded ? FACT_OK : facts.intentionalEmpty ? FACT_INFO : FACT_BAD,
+		facts.moduleLoaded ? facts.moduleLine : facts.intentionalEmpty
+			? t("没有启用的应用路径，黑名单不会对任何应用生效。") : t("未在 /proc/modules"),
 	));
 	lines.push(fmtFactRow(
 		t("模块文件"),
@@ -3031,7 +3072,9 @@ function buildKeyFacts(facts) {
 	// useful "did the kernel actually accept all my targets" signal.
 	// Only emit when the module is loaded; if it isn't, sysfs is
 	// stale or empty so the comparison is meaningless.
-	if (facts.moduleLoaded && facts.confTargetCount > 0 && facts.sysResolvedCount >= 0) {
+	if (facts.managed === "deny" && facts.appPathCount !== null && facts.moduleLoaded) {
+		lines.push(fmtFactRow(t("逐应用规则"), FACT_OK, t("内核当前确认 {0} 条逐应用路径。", [facts.appPathCount])));
+	} else if (facts.moduleLoaded && facts.confTargetCount > 0 && facts.sysResolvedCount >= 0) {
 		const resolved = facts.sysResolvedCount;
 		const configured = facts.confTargetCount;
 		// resolved > configured happens when Scene auto-discovery adds
@@ -3421,23 +3464,17 @@ function renderProcguard(snapshot) {
 	}
 }
 
-// Enable  = persist flag + full reload of BOTH modules via service.sh
-//           (it re-reads procguard.conf and loads what is enabled).
-// Disable = persist flag + unload procguard only; pathmask keeps running.
+// The companion has its own lifecycle and never unloads PathMask.
 async function setProcguardEnabled(enable) {
 	await writeLines(files.procguardConf, [enable ? "1" : "0"]);
-	if (enable) {
-		const output = await execShell(
-			`if grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
-		);
-		setLogContent("kernel", output);
-		await refreshDiagnostics();
-		showToast(t("隔离防护已启用"));
-	} else {
-		await execShell(`if grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME}; fi; true`);
-		showToast(t("隔离防护已停用"));
+	try {
+		const output = await execShell(withReloadLock(`sh ${shellQuote(files.service)} --apply-procguard`));
+		if (!linesFromText(output).includes("PATHMASK_PROCGUARD_OK " + (enable ? "enabled" : "disabled")))
+			throw new Error(t("设置已保存，但未确认防护状态，请查看诊断。"));
+	} finally {
+		await refreshConfig().catch(() => {});
 	}
-	await refreshConfig();
+	showToast(enable ? t("隔离防护已启用") : t("隔离防护已停用"));
 }
 
 async function refreshConfig() {
@@ -3461,6 +3498,7 @@ async function refreshConfig() {
 	const bootStateText = await readFile(files.bootState);
 	const moduleText = await safeExec(`grep '^${MODULE_NAME} ' /proc/modules || true`);
 	const legacyModuleText = await safeExec(`grep '^${LEGACY_MODULE_NAME} ' /proc/modules || true`);
+	const sysScopeText = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/scope_mode ] && cat /sys/module/${MODULE_NAME}/parameters/scope_mode || true`);
 	const sysDenyUids = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/deny_uids ] && cat /sys/module/${MODULE_NAME}/parameters/deny_uids || true`);
 	const sysResolvedCount = await safeExec(`[ -f /sys/module/${MODULE_NAME}/parameters/resolved_count ] && cat /sys/module/${MODULE_NAME}/parameters/resolved_count || true`);
 	const procguardConfText = await readFile(files.procguardConf);
@@ -3488,7 +3526,9 @@ async function refreshConfig() {
 	$("#autoSceneDebugfsInput").checked = parseBoolish(autoSceneDebugfsText, DEFAULT_AUTO_SCENE_DEBUGFS);
 	applySyscallHooksToCheckboxes(syscallHooksText);
 	updateSyscallHooksDisabledState();
-	const scope = ruleScopeDraft || savedRuleMode({ ruleModeText }) || normalizeScope(scopeText);
+	const configured = configuredRuleScope({ ruleModeText, scopeText });
+	const managed = savedRuleMode({ ruleModeText });
+	const scope = ruleScopeDraft || configured;
 	const scopeInput = document.querySelector(`input[name="scope"][value="${scope}"]`);
 	if (scopeInput) scopeInput.checked = true;
 	const writePolicyRaw = (writePolicyText || "").trim() || "passthrough";
@@ -3508,11 +3548,11 @@ async function refreshConfig() {
 		allow: linesFromText(allowUidText).join("\n"),
 	};
 	setActiveScopeList(activePage === "legacy" ? normalizeScope(scopeText) : scope, { syncCurrent: false });
-	const pkgText = scope === "allow" ? allowPkgText : denyPkgText;
-	const uidText = scope === "allow" ? allowUidText : denyUidText;
+	const usingUidList = configured === "allow" || (!managed && configured === "deny");
+	const pkgText = usingUidList ? (configured === "allow" ? allowPkgText : denyPkgText) : "";
+	const uidText = usingUidList ? (configured === "allow" ? allowUidText : denyUidText) : "";
 	updateScopeCopy(scope);
 	$("#waitSecondsInput").value = parseWaitSeconds(waitText);
-	renderApps();
 
 	lastSnapshot = {
 		...lastSnapshot,
@@ -3540,6 +3580,7 @@ async function refreshConfig() {
 		nowEpoch: Number.parseInt((nowText || "0").trim(), 10) || 0,
 		moduleText,
 		legacyModuleText,
+		sysScopeText,
 		sysDenyUids,
 		sysResolvedCount,
 		procguardConfText,
@@ -3556,6 +3597,7 @@ async function refreshConfig() {
 		loadFailReasonText,
 	};
 
+	renderApps();
 	await refreshTargetProbe();
 	updateSummary(lastSnapshot);
 	renderProcguard(lastSnapshot);
@@ -3787,10 +3829,11 @@ function describeBootState(snapshot, moduleLoaded) {
 	}
 }
 
-async function refreshTargetProbe() {
-	const paths = collectPaths();
+async function refreshTargetProbe(paths = savedRuleMode() === "deny" ? [] : linesFromText(lastSnapshot.targetText || "")) {
 	if (!paths.length) {
 		lastSnapshot.targetProbe = "";
+		lastSnapshot.targetProbeHidden = false;
+		lastSnapshot.targetResolvedCount = -1;
 		return;
 	}
 
@@ -3809,7 +3852,7 @@ async function refreshTargetProbe() {
 	 * "kernel resolved N/M" so the UI no longer blames the wrong cause.
 	 */
 	const loaded = (lastSnapshot.moduleText || "").trim();
-	const scope = normalizeScope(lastSnapshot.scopeText || "");
+	const scope = runningRuleScope() || configuredRuleScope();
 	if (loaded && (scope === "global" || scope === "allow")) {
 		const resolved = Number.parseInt((lastSnapshot.sysResolvedCount || "").trim(), 10);
 		if (Number.isFinite(resolved) && resolved >= 0) {
@@ -3863,20 +3906,23 @@ async function refreshTargetProbe() {
 }
 
 async function validateConfig(options = {}) {
-	const { throwOnError = false, requireModuleFile = false } = options;
+	const { throwOnError = false, requireModuleFile = false, stored = false } = options;
 	const errors = [];
 	const warnings = [];
-	const ok = [];
-	const paths = collectPaths();
-	const seenPaths = new Set();
-	const scope = ruleEditorScope();
-	const directUids = scope === "global" ? [] : activeDirectUids();
-	const allowSystemUids = scope === "allow" ? collectAllowSystemUids() : [];
-	const packages = [...selectedPackages].sort();
-
-	if (!paths.length && !$("#autoSceneDebugfsInput").checked) {
-		errors.push(t("隐藏路径为空。"));
+	if (stored && savedRuleMode() === "deny") {
+		const result = await probeExec(`sh ${shellQuote(files.service)} --check-app-profiles ${shellQuote(files.appProfiles)}`);
+		if (!result.ok) errors.push((result.stderr || result.error || t("配置校验未通过")).trim());
+		return showValidation(errors, warnings, throwOnError);
 	}
+	const scope = stored ? configuredRuleScope() : ruleEditorScope();
+	const paths = stored ? linesFromText(lastSnapshot.targetText || "") : collectPaths();
+	const seenPaths = new Set();
+	const directUids = scope === "global" ? [] : stored ? linesFromText(lastSnapshot.uidText || "") : activeDirectUids();
+	const allowSystemUids = scope !== "allow" ? [] : stored
+		? [...parseAllowSystemUidsText(lastSnapshot.allowSystemUidText || "")] : collectAllowSystemUids();
+	const packages = stored ? linesFromText(lastSnapshot.pkgText || "") : [...selectedPackages].sort();
+	const autoScene = stored ? parseBoolish(lastSnapshot.autoSceneDebugfsText, DEFAULT_AUTO_SCENE_DEBUGFS) : $("#autoSceneDebugfsInput").checked;
+	if (!paths.length && !autoScene) errors.push(t("隐藏路径为空。"));
 
 	for (const rawLine of paths) {
 		const { path, group } = splitTargetLine(rawLine);
@@ -3901,7 +3947,7 @@ async function validateConfig(options = {}) {
 		}
 	}
 
-	const waitRaw = $("#waitSecondsInput").value.trim();
+	const waitRaw = stored ? firstLine(lastSnapshot.waitText) : $("#waitSecondsInput").value.trim();
 	if (!waitRaw) {
 		warnings.push(t(`等待秒数为空，将使用默认值 {0}。`, [DEFAULT_WAIT_SECONDS]));
 	} else if (!/^\d+$/.test(waitRaw)) {
@@ -3925,7 +3971,7 @@ async function validateConfig(options = {}) {
 		errors.push(t(`模块文件不存在：{0}`, [files.ko]));
 	}
 
-	await refreshTargetProbe();
+	await refreshTargetProbe(paths);
 	if (lastSnapshot.targetProbeHidden) {
 		const resolved = Number.isFinite(lastSnapshot.targetResolvedCount) ? lastSnapshot.targetResolvedCount : -1;
 		if (resolved >= 0 && resolved < paths.length) {
@@ -3961,10 +4007,11 @@ true
 		}
 	}
 
-	if (!errors.length && !warnings.length) {
-		ok.push(t("配置校验通过。"));
-	}
+	return showValidation(errors, warnings, throwOnError);
+}
 
+function showValidation(errors, warnings, throwOnError) {
+	const ok = errors.length || warnings.length ? [] : [t("配置校验通过。")];
 	lastValidation = { errors, warnings, ok };
 	updateHealthList();
 
@@ -4041,37 +4088,54 @@ async function persistConfiguration(entries) {
 	for (const [path, values] of entries) await writeLines(path, values);
 }
 
-/*
- * Unload both modules and let service.sh load them back from the confs
- * on disk. One shared definition because applyWritePolicy and
- * reloadModule have to stay identical: write_op_policy is itself an
- * insmod parameter, so switching it needs the same full reload as any
- * other config change, and two copies of a string this long drift.
- *
- * The environment overrides are load-bearing. RESET_FAIL_GUARD clears
- * the repeated-insmod-failure skip, so a user who just fixed a config is
- * not blocked by the guard they tripped while it was broken;
- * IGNORE_FAIL_GUARD stops the reload from re-tripping it; and
- * INITIAL_DELAY_SECONDS=0 / WAIT_SECONDS=5 drop the boot-only settle
- * delay and the 60s path-appearance budget, because Android is already
- * running here and waiting that long would just look like a hung WebUI.
- */
-function reloadCommand({ keepCompanion = false } = {}) {
-	const companion = keepCompanion ? "" : `if grep -q '^1' ${shellQuote(files.procguardConf)} 2>/dev/null && grep -q '^${PROCGUARD_MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${PROCGUARD_MODULE_NAME} 2>/dev/null || true; fi; `;
-	return `${companion}rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then echo 'pathmask is still loaded after rmmod' >&2; exit 21; fi; PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}; rc=$?; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30; exit "$rc"`;
+// Mode trials and profile commits already own this lock. Other reloads and
+// pause take it here so a late background reload can't undo the action.
+function withReloadLock(command) {
+	return `mkdir -p ${shellQuote(CONFIGDIR)} || exit 30
+lock=${shellQuote(RELOAD_LOCK)}
+mkdir "$lock" || exit 30
+trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+${command}`;
+}
+
+function reloadCommand() {
+	return `rm -f ${shellQuote(files.sceneDebugfsWatchStop)} ${shellQuote(files.failCount)} ${shellQuote(files.failReason)} 2>/dev/null || true
+if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME} || exit 20; fi
+if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then exit 21; fi
+PATHMASK_REQUIRE_RELOAD_RECEIPT=1 PATHMASK_RESET_FAIL_GUARD=1 PATHMASK_IGNORE_FAIL_GUARD=1 PATHMASK_INITIAL_DELAY_SECONDS=0 PATHMASK_WAIT_SECONDS=5 sh ${shellQuote(files.service)}
+rc=$?
+dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30
+exit "$rc"`;
+}
+
+async function reloadSavedSettings() {
+	let output;
+	try {
+		output = await execShell(withReloadLock(reloadCommand()));
+	} catch (_) {
+		await refreshDiagnostics().catch(() => {});
+		throw new Error(t("热重载未确认生效，请查看诊断。"));
+	}
+	setLogContent("kernel", output);
+	await refreshDiagnostics();
+	const receipts = linesFromText(output);
+	if (receipts.includes("PATHMASK_RELOAD_OK empty-blacklist") && !lastSnapshot.moduleText?.trim()) return false;
+	if (!receipts.includes("PATHMASK_RELOAD_OK active") || !lastSnapshot.moduleText?.trim())
+		throw new Error(t("热重载未确认生效，请查看诊断。"));
+	return true;
 }
 
 async function applyRuleMode() {
 	const mode = currentScope();
 	if (mode === "deny" && !appDirectory) throw new Error(t("新版配置资源不可用，当前模式未更改。"));
-	const reload = reloadCommand({ keepCompanion: true });
+	const reload = reloadCommand();
 	const script = `umask 077
 mkdir -p ${shellQuote(CONFIGDIR)} || exit 30
 cfg=${shellQuote(files.ruleMode)}
 if [ -e "$cfg" ] || [ -L "$cfg" ]; then
 	[ -f "$cfg" ] && [ ! -L "$cfg" ] || exit 30
 fi
-lock=${shellQuote(CONFIGDIR + "/.profile-apply-lock")}
+lock=${shellQuote(RELOAD_LOCK)}
 mkdir "$lock" || exit 30
 stage=''
 finish() {
@@ -4123,10 +4187,9 @@ async function applyWritePolicy() {
 	const value = checked ? checked.value : "passthrough";
 	await writeLines(files.writeOpPolicy, [value]);
 	statusText.textContent = t("正在应用写入伪装策略...");
-	const output = await execShell(reloadCommand());
-	setLogContent("kernel", output);
-	await refreshDiagnostics();
-	showToast(t(`写入伪装已切换为「{0}」`, [writePolicyLabel(value)]));
+	const loaded = await reloadSavedSettings();
+	showToast(loaded ? t(`写入伪装已切换为「{0}」`, [writePolicyLabel(value)])
+		: t("没有启用的应用路径，黑名单不会对任何应用生效。"));
 }
 
 async function reloadModule() {
@@ -4139,15 +4202,17 @@ async function reloadModule() {
 		return;
 	}
 	statusText.textContent = t("正在热重载...");
-	const output = await execShell(reloadCommand());
-	setLogContent("kernel", output);
-	await refreshDiagnostics();
+	if (!await reloadSavedSettings()) {
+		showToast(t("没有启用的应用路径，黑名单不会对任何应用生效。"));
+		return;
+	}
 	const sceneState = lastSnapshot.sceneDebugfsState || {};
-	if ($("#autoSceneDebugfsInput").checked && sceneState.status === "no-package") {
+	const sceneRequested = savedRuleMode() !== "deny" && $("#autoSceneDebugfsInput").checked;
+	if (sceneRequested && sceneState.status === "no-package") {
 		showToast(t("热重载完成；未安装 Scene，已跳过自动识别"));
-	} else if ($("#autoSceneDebugfsInput").checked && sceneState.status === "late-watching") {
+	} else if (sceneRequested && sceneState.status === "late-watching") {
 		showToast(t("热重载完成，后台继续等待 Scene 启动"));
-	} else if ($("#autoSceneDebugfsInput").checked && sceneState.status !== "found" && sceneState.status !== "late-found") {
+	} else if (sceneRequested && sceneState.status !== "found" && sceneState.status !== "late-found") {
 		showToast(t("热重载完成，但当前未识别到 Scene debugfs"));
 	} else {
 		showToast(t("热重载完成"));
@@ -4155,10 +4220,12 @@ async function reloadModule() {
 }
 
 async function pauseHiding() {
-	const output = await execShell(
-		`touch ${shellQuote(files.sceneDebugfsWatchStop)} 2>/dev/null || true; if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then rmmod ${MODULE_NAME}; log -p i -t pathmask 'hidden paths paused from WebUI'; printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask unloaded'; else printf 'state=paused\\nupdated=%s\\ndetail=paused via WebUI\\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)} 2>/dev/null || true; echo 'pathmask is not loaded'; fi; dmesg | grep -Ei 'pathmask|procguard|nohello|unknown symbol|invalid module|exec format|module_layout' | tail -n 30`
-	);
-	setLogContent("kernel", output);
+	await execShell(withReloadLock(`touch ${shellQuote(files.sceneDebugfsWatchStop)} || exit 20
+if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then
+	rmmod ${MODULE_NAME} || exit 20
+fi
+if grep -q '^${MODULE_NAME} ' /proc/modules 2>/dev/null; then exit 21; fi
+printf 'state=paused\nupdated=%s\ndetail=paused via WebUI\n' "$(date +%s 2>/dev/null || echo 0)" > ${shellQuote(files.bootState)}`));
 	await refreshDiagnostics();
 	statusText.textContent = t("隐藏已暂停，热重载可恢复");
 	showToast(t("隐藏已暂停"));
@@ -4655,7 +4722,7 @@ $("#saveBtn").addEventListener("click", () => runAction(t("正在保存..."), sa
 $("#pauseBtn").addEventListener("click", () => runAction(t("正在暂停隐藏..."), pauseHiding).catch(() => {}));
 $("#reloadBtn").addEventListener("click", () => runAction(t("正在热重载..."), reloadModule).catch(() => {}));
 $("#runDiagnosticBtn").addEventListener("click", () => runAction(t("正在生成诊断..."), refreshDiagnostics).catch(() => {}));
-$("#validateConfigBtn").addEventListener("click", () => runAction(t("正在校验配置..."), () => validateConfig()).catch(() => {}));
+$("#validateConfigBtn").addEventListener("click", () => runAction(t("正在校验配置..."), () => validateConfig({ stored: true })).catch(() => {}));
 $("#refreshLogsBtn").addEventListener("click", () => runAction(t("正在刷新日志..."), refreshDiagnostics).catch(() => {}));
 $("#copyReportBtn").addEventListener("click", () => copyText(lastReport || buildReport()).catch((error) => showToast(error.message)));
 $("#copyReportBtn2").addEventListener("click", () => copyText($("#reportOutput").value).catch((error) => showToast(error.message)));
@@ -4777,7 +4844,7 @@ async function applyAppProfileChanges(changes, baseline) {
 		const { fingerprint, profiles } = await readAppProfileConfig();
 		for (const [key, value] of changes) {
 			if (JSON.stringify(profiles.get(key)) !== JSON.stringify(baseline.get(key)))
-				throw new Error(t("同一应用的配置已被修改，请备份草稿并重新打开 WebUI。"));
+				throw new Error(t("同一应用的配置已被修改。请记下未应用的更改，重新打开 WebUI 后再编辑。"));
 			profiles.set(key, value);
 		}
 		const result = window.PathMaskProfileDrafts.encodeRules(profiles);
@@ -4801,7 +4868,7 @@ async function applyAppProfileChanges(changes, baseline) {
 			// After handoff the shell owns cleanup even if the bridge times out.
 			handedOff = true;
 			const output = await execShell(`${appProfileSnapshotShell()}
-lock=${shellQuote(CONFIGDIR + "/.profile-apply-lock")}
+lock=${shellQuote(RELOAD_LOCK)}
 owned=0
 finish() {
 	${cleanup} || true
